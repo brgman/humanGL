@@ -13,9 +13,19 @@ pub fn build(b: *std.Build) void {
     exe_mod.link_libc = true;
     exe_mod.linkSystemLibrary("SDL3", .{});
     exe_mod.linkSystemLibrary("GL", .{});
+    // glad.c when compiling should also see its titles
+    exe_mod.addIncludePath(b.path("vendor/glad/include"));
+
+    // Compile glad.c as a normal C-file and link into our binary.
+    // Flag is important: without it, Zig can swear at some
+    // C-constructions inside the generated code.
+    exe_mod.addCSourceFile(.{
+        .file = b.path("vendor/glad/src/glad.c"),
+        .flags = &.{"-std=c99"},
+    });
 
     const exe = b.addExecutable(.{
-        .name = "humangl",
+        .name = "scop",
         .root_module = exe_mod,
     });
 
