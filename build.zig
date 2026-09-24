@@ -36,6 +36,7 @@ pub fn build(b: *std.Build) void {
 
     run_cmd.step.dependOn(b.getInstallStep());
 
+    run_cmd.addFileArg(b.path("config.json"));
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }

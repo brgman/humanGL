@@ -1,42 +1,30 @@
 const std = @import("std");
 const zopengl = @import("zopengl");
 const sdl3 = @import("sdl3");
+const gl = zopengl.bindings;
+const Config = @import("Config.zig");
 
-pub fn main() !void {
-    defer sdl3.shutdown();
+pub fn main(init: std.process.Init) !void {
+    const argv = try std.process.Args.toSlice(init.minimal.args, init.arena.allocator());
 
-    const init_flags = sdl3.InitFlags{ .video = true };
-    try sdl3.init(init_flags);
-    defer sdl3.quit(init_flags);
-
-    try sdl3.video.gl.setAttribute(.context_major_version, 4);
-    try sdl3.video.gl.setAttribute(.context_minor_version, 0);
-    try sdl3.video.gl.setAttribute(.context_profile_mask, @intFromEnum(sdl3.video.gl.Profile.core));
-    try sdl3.video.gl.setAttribute(.double_buffer, 1);
-
-    const window = try sdl3.video.Window.init("humanGL", 800, 600, .{ .open_gl = true });
-    defer window.deinit();
-
-    const context = try sdl3.video.gl.Context.init(window);
-    defer context.deinit() catch {};
-
-    try zopengl.loadCoreProfile(getProcAddress, 4, 0);
-
-    const gl = zopengl.bindings;
-
-    var running = true;
-    while (running) {
-        while (sdl3.events.poll()) |event| switch (event) {
-            .quit, .terminating => running = false,
-            else => {},
-        };
-
-        const clear_color: [4]f32 = .{ 0.2, 0.4, 0.8, 1.0 };
-        gl.clearBufferfv(gl.COLOR, 0, &clear_color);
-        try sdl3.video.gl.swapWindow(window);
+    var config: Config = .default;
+    if (argv.len == 2) {
+        const parsed = try Config.parse(init.arena.allocator(), init.io, argv[1]);
+        config = parsed.value;
     }
+
+    try sdl3.init(.{ .video = true });
+    defer {
+        sdl3.quit(.{ .video = true });
+        sdl3.shutdown();
+    }
+
+    try configureSdlContext(config);
 }
 
-fn getProcAddress(name: [*:0]const u8) callconv(.c) ?*const anyopaque {
-    return sdl3.video.gl.getProcAddress(std.mem.span(name));
+fn configureSdlContext(config: Config) !void {
+    try sdl3.video.gl.setAttribute(.context_major_version, config.opengl.major_version);
+    try sdl3.video.gl.setAttribute(.context_minor_version, config.opengl.minor_version);
+    try sdl3.video.gl.setAttribute(.context_profile_mask, @intFromEnum(config.opengl.profile_mask));
+    try sdl3.video.gl.setAttribute(.double_buffer, @intFromBool(config.opengl.double_buffer));
 }

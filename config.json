@@ -1,0 +1,12 @@
+{
+    "window": {
+        "width": 800,
+        "height": 600
+    },
+    "opengl": {
+        "major_version": 4,
+        "minor_version": 0,
+        "profile_mask": "core",
+        "double_buffer": true
+    }
+}
