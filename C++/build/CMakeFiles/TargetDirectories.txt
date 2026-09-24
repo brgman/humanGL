@@ -1,4 +1,0 @@
-/home/abergman/Documents/humanGL/C++/build/CMakeFiles/glad.dir
-/home/abergman/Documents/humanGL/C++/build/CMakeFiles/humanGL.dir
-/home/abergman/Documents/humanGL/C++/build/CMakeFiles/edit_cache.dir
-/home/abergman/Documents/humanGL/C++/build/CMakeFiles/rebuild_cache.dir

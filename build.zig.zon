@@ -1,0 +1,21 @@
+.{
+    .name = .humanGL,
+    .version = "0.0.0",
+    .fingerprint = 0x1ef9504784d9cf2d,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zopengl = .{
+            .url = "git+https://github.com/zig-gamedev/zopengl?ref=main#eda87248c6fa190fbb5fe78fc84c5e28d6b2032e",
+            .hash = "zopengl-0.6.0-dev-5-tnz8mnDgCHR72YtUpLBYW_u4JgZ0Ub-UFX-M0zRSG1",
+        },
+        .sdl3 = .{
+            .url = "git+https://codeberg.org/7Games/zig-sdl3#69cf1fba30b39fe0a140fc2139d403692e650d16",
+            .hash = "sdl3-0.2.2-NmT1Q0ZUKgCxQv6PXwCIbr_MKILJYAgDWv1YhClnS4XH",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
