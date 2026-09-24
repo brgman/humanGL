@@ -1,0 +1,1 @@
+/usr/lib64/ccache/c++ -Wl,--dependency-file=CMakeFiles/humanGL.dir/link.d CMakeFiles/humanGL.dir/src/main.cpp.o -o humanGL  libglad.a /usr/lib64/libSDL3.so.0.4.14 -lgcc_s_asneeded -lgcc_s_asneeded
