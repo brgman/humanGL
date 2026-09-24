@@ -3,10 +3,20 @@
         "width": 800,
         "height": 600
     },
+
     "opengl": {
         "major_version": 4,
         "minor_version": 0,
         "profile_mask": "core",
         "double_buffer": true
+    },
+
+    "app": {
+        "background": {
+            "r": 1.0,
+            "g": 1.0,
+            "b": 1.0,
+            "a": 1.0
+        }
     }
 }

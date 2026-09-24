@@ -19,6 +19,15 @@ opengl: struct {
     double_buffer: bool = true,
 },
 
+app: struct {
+    background: struct {
+        r: f32 = 0.0,
+        g: f32 = 0.0,
+        b: f32 = 0.0,
+        a: f32 = 0.0,
+    },
+},
+
 pub const default: Config = .{
     .window = .{
         .width = 800,
@@ -29,6 +38,14 @@ pub const default: Config = .{
         .minor_version = 0,
         .profile_mask = .core,
         .double_buffer = true,
+    },
+    .app = .{
+        .background = .{
+            .r = 0.0,
+            .g = 0.0,
+            .b = 0.0,
+            .a = 0.0,
+        },
     },
 };
 
