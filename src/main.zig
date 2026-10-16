@@ -1,10 +1,79 @@
 const std = @import("std");
 const zopengl = @import("zopengl");
-const gl = zopengl.bindings;
 const c = @import("c");
+
+const gl = zopengl.bindings;
+
+const vertex_src =
+    \\#version 400 core
+    \\layout(location = 0) in vec2 aPos;
+    \\uniform vec2 uScale;
+    \\void main() {
+    \\    gl_Position = vec4(aPos * uScale, 0.0, 1.0);
+    \\}
+;
+
+const fragment_src =
+    \\#version 400 core
+    \\uniform vec4 uColor;
+    \\out vec4 FragColor;
+    \\void main() {
+    \\    FragColor = uColor;
+    \\}
+;
+
+// Geometry in normalized units: 1.0 = half of the shorter window side.
+const ring_segments = 128;
+const ring_outer: f32 = 0.691;
+const ring_inner: f32 = 0.597;
+// Triangle vertices lie slightly under the ring, so they touch its inner edge.
+const tri_radius: f32 = 0.606;
+
+const tri_floats = 6;
+const ring_floats = (ring_segments + 1) * 4;
 
 fn getProcAddress(name: [*:0]const u8) callconv(.c) ?*const anyopaque {
     return @ptrCast(c.SDL_GL_GetProcAddress(name));
+}
+
+fn compileShader(kind: gl.Enum, src: [*:0]const u8) !gl.Uint {
+    const shader = gl.createShader(kind);
+    gl.shaderSource(shader, 1, &[_][*:0]const u8{src}, null);
+    gl.compileShader(shader);
+
+    var ok: gl.Int = 0;
+    gl.getShaderiv(shader, gl.COMPILE_STATUS, &ok);
+    if (ok == 0) {
+        var log: [512]u8 = undefined;
+        var len: gl.Sizei = 0;
+        gl.getShaderInfoLog(shader, log.len, &len, &log);
+        std.debug.print("shader error: {s}\n", .{log[0..@intCast(len)]});
+        return error.ShaderCompileFailed;
+    }
+    return shader;
+}
+
+fn createProgram() !gl.Uint {
+    const vs = try compileShader(gl.VERTEX_SHADER, vertex_src);
+    const fs = try compileShader(gl.FRAGMENT_SHADER, fragment_src);
+
+    const program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+
+    var ok: gl.Int = 0;
+    gl.getProgramiv(program, gl.LINK_STATUS, &ok);
+    if (ok == 0) {
+        var log: [512]u8 = undefined;
+        var len: gl.Sizei = 0;
+        gl.getProgramInfoLog(program, log.len, &len, &log);
+        std.debug.print("link error: {s}\n", .{log[0..@intCast(len)]});
+        return error.ProgramLinkFailed;
+    }
+    return program;
 }
 
 pub fn main() !void {
@@ -19,6 +88,9 @@ pub fn main() !void {
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 0);
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_DOUBLEBUFFER, 1);
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_DEPTH_SIZE, 24);
+    // Smooth edges
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1);
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4);
 
     const window = c.SDL_CreateWindow(
         "HumanGL",
@@ -37,30 +109,92 @@ pub fn main() !void {
     };
     defer _ = c.SDL_GL_DestroyContext(gl_context);
 
-    try zopengl.loadCoreProfile(getProcAddress, 4, 0);
+    _ = c.SDL_GL_SetSwapInterval(1);
 
+    try zopengl.loadCoreProfile(getProcAddress, 4, 0);
     std.debug.print("OpenGL loaded: {s}\n", .{gl.getString(gl.VERSION)});
 
-    gl.enable(gl.DEPTH_TEST);
+    const program = try createProgram();
+    defer gl.deleteProgram(program);
+    const u_color = gl.getUniformLocation(program, "uColor");
+    const u_scale = gl.getUniformLocation(program, "uScale");
+
+    // One buffer: 3 triangle vertices first, then the ring as a triangle strip.
+    var vertices: [tri_floats + ring_floats]f32 = undefined;
+
+    const cos30: f32 = @cos(std.math.pi / 6.0);
+    vertices[0] = 0.0;
+    vertices[1] = tri_radius;
+    vertices[2] = tri_radius * cos30;
+    vertices[3] = -tri_radius * 0.5;
+    vertices[4] = -tri_radius * cos30;
+    vertices[5] = -tri_radius * 0.5;
+
+    var i: usize = 0;
+    while (i <= ring_segments) : (i += 1) {
+        const a = 2.0 * std.math.pi * @as(f32, @floatFromInt(i)) / ring_segments;
+        const cs = @cos(a);
+        const sn = @sin(a);
+        const base = tri_floats + i * 4;
+        vertices[base + 0] = cs * ring_outer;
+        vertices[base + 1] = sn * ring_outer;
+        vertices[base + 2] = cs * ring_inner;
+        vertices[base + 3] = sn * ring_inner;
+    }
+
+    var vao: gl.Uint = 0;
+    var vbo: gl.Uint = 0;
+    gl.genVertexArrays(1, &vao);
+    gl.genBuffers(1, &vbo);
+    defer gl.deleteVertexArrays(1, &vao);
+    defer gl.deleteBuffers(1, &vbo);
+
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(
+        gl.ARRAY_BUFFER,
+        @intCast(vertices.len * @sizeOf(f32)),
+        &vertices,
+        gl.STATIC_DRAW,
+    );
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, 2 * @sizeOf(f32), null);
+    gl.enableVertexAttribArray(0);
 
     var running = true;
     while (running) {
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event)) {
-            switch (event.type) {
-                c.SDL_EVENT_QUIT => running = false,
-                c.SDL_EVENT_KEY_DOWN => {
-                    if (event.key.key == c.SDLK_ESCAPE) running = false;
-                },
-                c.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED => {
-                    gl.viewport(0, 0, event.window.data1, event.window.data2);
-                },
-                else => {},
-            }
+            if (event.type == c.SDL_EVENT_QUIT) running = false;
+            if (event.type == c.SDL_EVENT_KEY_DOWN and event.key.key == c.SDLK_ESCAPE)
+                running = false;
         }
 
-        gl.clearColor(0.1, 0.1, 0.15, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.SDL_GetWindowSizeInPixels(window, &w, &h);
+        gl.viewport(0, 0, w, h);
+
+        // Keep the circle round on any window shape.
+        const fw: f32 = @floatFromInt(@max(w, 1));
+        const fh: f32 = @floatFromInt(@max(h, 1));
+        const sx: f32 = if (fw > fh) fh / fw else 1.0;
+        const sy: f32 = if (fh > fw) fw / fh else 1.0;
+
+        // Background: gray #b9bdc3
+        gl.clearColor(0.725, 0.741, 0.765, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.useProgram(program);
+        gl.uniform2f(u_scale, sx, sy);
+        gl.bindVertexArray(vao);
+
+        // Orange triangle #f28c28
+        gl.uniform4f(u_color, 0.949, 0.549, 0.157, 1.0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+        // Dark blue ring #0f2a5c
+        gl.uniform4f(u_color, 0.059, 0.165, 0.361, 1.0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 3, (ring_segments + 1) * 2);
 
         _ = c.SDL_GL_SwapWindow(window);
     }
