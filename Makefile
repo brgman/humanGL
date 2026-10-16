@@ -6,26 +6,29 @@
 #    By: abergman <abergman@student.42.fr>          +#+  +:+       +#+         #
 #                                                 +#+#+#+#+#+   +#+            #
 #    Created: 2026/09/21 08:55:15 by abergman          #+#    #+#              #
-#    Updated: 2026/09/21 09:22:16 by abergman         ###   ########.fr        #
+#    Updated: 2026/10/16 12:50:04 by abergman         ###   ########.fr        #
 #                                                                              #
 # **************************************************************************** #
 
-NAME = humangl
+NAME     = humangl
+ZIG      = zig
+VIDEODRV = x11
+
+.PHONY: all $(NAME) run clean fclean re
 
 all: $(NAME)
 
 $(NAME):
-	zig build
+	$(ZIG) build
+	cp zig-out/bin/$(NAME) ./$(NAME)
 
 run:
-	SDL_VIDEODRIVER=x11 zig build run
-	
+	SDL_VIDEODRIVER=$(VIDEODRV) $(ZIG) build run
+
 clean:
 	rm -rf .zig-cache
 
 fclean: clean
-	rm -rf zig-out
+	rm -rf zig-out $(NAME)
 
 re: fclean all
-
-.PHONY: all run clean fclean re

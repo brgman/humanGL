@@ -1,0 +1,13 @@
+.{
+    .name = .humanGL,
+    .version = "0.0.1",
+    .dependencies = .{
+        .zopengl = .{
+            .url = "git+https://github.com/zig-gamedev/zopengl#eda87248c6fa190fbb5fe78fc84c5e28d6b2032e",
+            .hash = "zopengl-0.6.0-dev-5-tnz8mnDgCHR72YtUpLBYW_u4JgZ0Ub-UFX-M0zRSG1",
+        },
+    },
+    .minimum_zig_version = "0.17.0",
+    .paths = .{""},
+    .fingerprint = 0x1ef95047b4dd03d6,
+}

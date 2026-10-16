@@ -1,12 +1,27 @@
-# Friction specifically between Zig 0.16 (unstable, often breaking API) and @cImport, which doesn't always perfectly parsite "dirty" system headers.
+# HumanGL
 
-# why C files ?
+Written in Zig.
 
-GLAD generates a loader for **OpenGL 4.0** in the form of a C-file - Zig compiles it directly, without additional tools, since GL-functions newer version 1.1 need to be loaded in rantime through pointers, and not connected statically.
+## Status
 
-_To run on the shcool PC - use video driver x11_
+WIP. What works right now:
+
+- SDL3 window with an OpenGL 4.0 core context
+- OpenGL function loading with [zopengl](https://github.com/zig-gamedev/zopengl)
+- Shaders (vertex + fragment), VAO/VBO, uniforms
+- Test scene: orange triangle inside a blue circle on a grey background,
+  stays round when the window is resized
+- ESC or closing the window quits
+
+## Build and run
+
+Needs Zig 0.17 and SDL3 installed on the system.
 ```
-SDL_VIDEODRIVER=x11 ./zig-out/bin/humangl; echo "exit code: $?"
+make run
+```
+or
+```
+SDL_VIDEODRIVER=x11 zig build run
 ```
 
-du -h --max-depth=1 /home/abergman/.var 2>/dev/null | sort -rh | head -20
+`SDL_VIDEODRIVER=x11` is needed on the school PCs.
