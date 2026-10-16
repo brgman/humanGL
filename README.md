@@ -16,12 +16,21 @@ WIP. What works right now:
 ## Build and run
 
 Needs Zig 0.17 and SDL3 installed on the system.
-```
+```bash
 make run
 ```
-or
-```
+or 
+```bash
 SDL_VIDEODRIVER=x11 zig build run
 ```
 
 `SDL_VIDEODRIVER=x11` is needed on the school PCs.
+
+## Trubleshutting
+
+```bash
+ls ~/.config/Code/User/globalStorage/ziglang.vscode-zig/zig/
+export PATH="$HOME/.config/Code/User/globalStorage/ziglang.vscode-zig/zig/x86_64-linux-0.17.0:$PATH"
+zig version
+make run
+```

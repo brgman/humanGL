@@ -4,6 +4,12 @@ const c = @import("c");
 
 const gl = zopengl.bindings;
 
+// Une *shader* est un petit programme qui s'exécute sur la carte graphique (GPU). Le pipeline graphique fonctionne ainsi:
+// 1.   Le CPU envoie des sommets (vertices) au GPU.
+// 2.   Le vertex shader s'exécute une fois par sommet et calcule sa position à l'écran.
+// 3.   La rastérisation transforme chaque triangle en pixels
+// 4.   Le fragment shader s'exécute une fois par pixel et calcule sa couleur.
+
 const vertex_src =
     \\#version 400 core
     \\layout(location = 0) in vec2 aPos;
@@ -23,23 +29,28 @@ const fragment_src =
 ;
 
 // Geometry in normalized units: 1.0 = half of the shorter window side.
-const ring_segments = 128;
-const ring_outer: f32 = 0.691;
+const ring_segments = 16;                       // l'anneau est un polygone de 16 côtés
+const ring_outer: f32 = 0.8;                    // les rayons extérieur et intérieur. Leur différence donne l'épaisseur de l'anneau
 const ring_inner: f32 = 0.597;
 // Triangle vertices lie slightly under the ring, so they touch its inner edge.
-const tri_radius: f32 = 0.606;
+const tri_radius: f32 = 0.606;                  // les pointes du trianglepassent dons dégèrement sous l'anneau, et le triangle paraît parfairement inscrit
+const tri_floats = 6;                           // 3 sommets pour 2 nombres (x, y)
+const ring_floats = (ring_segments + 1) * 4;    // pour chaque angle, il y a 2 sommets (exrérieur et intérieur) donc 4 nombres
 
-const tri_floats = 6;
-const ring_floats = (ring_segments + 1) * 4;
-
+// Les fonctions OpenGL ne sont pas liées à la compilation.
+// Le pilote graphique les fourint à l'exécution
+//      _zopenlg_ appelle cette fonction pour chaque fonction OpenGL (glClear, glDrawArrays, etc.).
+//      SDL renvoie l'adresse mémoire de chacune.
+//      callconv(.c) - la fonction doi t respecter la convention d'appel du C.
 fn getProcAddress(name: [*:0]const u8) callconv(.c) ?*const anyopaque {
     return @ptrCast(c.SDL_GL_GetProcAddress(name));
 }
 
+// La fonction renvoie soit un identifiant, soit une erreur (type "error union")
 fn compileShader(kind: gl.Enum, src: [*:0]const u8) !gl.Uint {
-    const shader = gl.createShader(kind);
-    gl.shaderSource(shader, 1, &[_][*:0]const u8{src}, null);
-    gl.compileShader(shader);
+    const shader = gl.createShader(kind);     // cree une shader vide, de type  vertex ou fragment.
+    gl.shaderSource(shader, 1, &[_][*:0]const u8{src}, null);   // donne le code source. 1 = une seule chaîne.
+    gl.compileShader(shader);       // le pilote compile le code.
 
     var ok: gl.Int = 0;
     gl.getShaderiv(shader, gl.COMPILE_STATUS, &ok);
@@ -53,6 +64,7 @@ fn compileShader(kind: gl.Enum, src: [*:0]const u8) !gl.Uint {
     return shader;
 }
 
+// Un programme est l’assemblage du vertex shader et du fragment shader. attachShader les attache, linkProgram les relie
 fn createProgram() !gl.Uint {
     const vs = try compileShader(gl.VERTEX_SHADER, vertex_src);
     const fs = try compileShader(gl.FRAGMENT_SHADER, fragment_src);
@@ -75,6 +87,10 @@ fn createProgram() !gl.Uint {
     }
     return program;
 }
+
+// SDL et le contexte OpenGL
+//      SDL_Init initialise le sous-système vidéo.
+//      defer : cette ligne s’exécute à la sortie de la fonction, quoi qu’il arrive. Le nettoyage est donc écrit juste à côté de l’initialisation.
 
 pub fn main() !void {
     if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
@@ -142,11 +158,14 @@ pub fn main() !void {
         vertices[base + 3] = sn * ring_inner;
     }
 
+    // VBO (Vertex Buffer Object)   : une tampon dans le mémoire du GPU qui contient les données des sommets.
+    // VAO (Vertex Array Object)    : une "dossier" qui mémorise comment lire ces données. Il retient le VBO utilisé et le fornat des attributs.
+    
     var vao: gl.Uint = 0;
     var vbo: gl.Uint = 0;
     gl.genVertexArrays(1, &vao);
     gl.genBuffers(1, &vbo);
-    defer gl.deleteVertexArrays(1, &vao);
+    defer gl.deleteVertexArrays(1, &vao); // les détruiront à la fin
     defer gl.deleteBuffers(1, &vbo);
 
     gl.bindVertexArray(vao);
