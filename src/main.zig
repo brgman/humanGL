@@ -1,8 +1,12 @@
 const std = @import("std");
 const zopengl = @import("zopengl");
 const c = @import("c");
+const math = @import("math.zig");
 
 const gl = zopengl.bindings;
+const Mat4 = math.Mat4;
+
+// --- shaders ---
 
 // Une *shader* est un petit programme qui s'exécute sur la carte graphique (GPU). Le pipeline graphique fonctionne ainsi:
 // 1.   Le CPU envoie des sommets (vertices) au GPU.
@@ -12,45 +16,93 @@ const gl = zopengl.bindings;
 
 const vertex_src =
     \\#version 400 core
-    \\layout(location = 0) in vec2 aPos;
-    \\uniform vec2 uScale;
+    \\layout(location = 0) in vec3 aPos;
+    \\layout(location = 1) in vec3 aNormal;
+    \\uniform mat4 uProj;
+    \\uniform mat4 uView;
+    \\uniform mat4 uModel;
+    \\uniform mat4 uSize;
+    \\out vec3 vNormal; 
     \\void main() {
-    \\    gl_Position = vec4(aPos * uScale, 0.0, 1.0);
+    \\    vNormal = mat3(uModel) * aNormal;
+    \\    gl_Position = uProj * uView * uModel * vec4(aPos * uSize, 1.0);
     \\}
 ;
 
 const fragment_src =
     \\#version 400 core
-    \\uniform vec4 uColor;
+    \\in vec3 vNormal;
+    \\uniform vec3 uColor;
     \\out vec4 FragColor;
     \\void main() {
-    \\    FragColor = uColor;
+    \\    vec3 n = normalize(vNormal);
+    \\    float light = 0.35 + 0.65 * max(dot(n, normalize(vec3(0.4, 0.8, 0.6))), 0.0);
+    \\    FragColor = vec4(uColor * light, 1.0);
     \\}
 ;
 
-// Geometry in normalized units: 1.0 = half of the shorter window side.
-const ring_segments = 16;                       // l'anneau est un polygone de 16 côtés
-const ring_outer: f32 = 0.8;                    // les rayons extérieur et intérieur. Leur différence donne l'épaisseur de l'anneau
-const ring_inner: f32 = 0.597;
-// Triangle vertices lie slightly under the ring, so they touch its inner edge.
-const tri_radius: f32 = 0.606;                  // les pointes du trianglepassent dons dégèrement sous l'anneau, et le triangle paraît parfairement inscrit
-const tri_floats = 6;                           // 3 sommets pour 2 nombres (x, y)
-const ring_floats = (ring_segments + 1) * 4;    // pour chaque angle, il y a 2 sommets (exrérieur et intérieur) donc 4 nombres
+// --- cube ---
+// cube unité centré en (0,0,0), côté 1 : 6 faces x 2 triangles x 3 sommets,
+// chaque sommet = position (3 floats) + normale (3 floats)
 
-// Les fonctions OpenGL ne sont pas liées à la compilation.
-// Le pilote graphique les fourint à l'exécution
-//      _zopenlg_ appelle cette fonction pour chaque fonction OpenGL (glClear, glDrawArrays, etc.).
-//      SDL renvoie l'adresse mémoire de chacune.
-//      callconv(.c) - la fonction doi t respecter la convention d'appel du C.
+const cube_vertex_count = 36;
+
+fn buildCube() [cube_vertex_count * 6]f32 {
+    // pour chaque face : normale, axe u, axe v (u * v = normale)
+    const faces = [6][3][3]f32 {
+        .{ .{0,0, 1}, .{ 1,0,0}, .{0,1,0} }, // +z
+        .{ .{0,0,-1}, .{-1,0,0}, .{0,1,0} }, // -z
+        .{ .{ 1,0,0}, .{0,0,-1}, .{0,1,0} }, // +x
+        .{ .{-1,0,0}, .{0,0,1},  .{0,1,0} }, // -x
+        .{ .{0, 1,0}, .{1,0,0}, .{0,0,-1} }, // +y
+        .{ .{0,-1,0}, .{1,0,0}, .{0,0, 1} }, // -y
+    };
+
+    const signs = [4][2]f32{
+        .{-1, -1 },
+        .{ 1, -1},
+        .{ 1,  1},
+        .{-1,  1},
+    };
+
+    const order = [6]usize{ 0, 1, 2, 0, 2, 3 };
+
+    var data: [cube_vertex_count * 6]f32 = undefined;
+    var n: usize = 0;
+    for (faces) |face| {
+        const nrm = face[0];
+        const u = face[1];
+        const v = face[2];
+        var corners: [4][3]f32 = undefined;
+        for (signs, 0..) |s, i| {
+            for (0..3) |k| {
+                corners[i][k] = 0.5 * nrm[k] + 0.5 * s[0] * u[k] + 0.5 * s[1] * v[k];
+            }
+        }
+        for (order) |idx| {
+            for (0..3) |k| {
+                data[n] = corners[idx][k];
+                n += 1;
+            }
+            for (0..3) |k| {
+                data[n] = nrm[k];
+                n += 1;
+            }
+        }
+    }
+    return data;
+}
+
+// --- OpenGL utils ---
+
 fn getProcAddress(name: [*:0]const u8) callconv(.c) ?*const anyopaque {
     return @ptrCast(c.SDL_GL_GetProcAddress(name));
 }
 
-// La fonction renvoie soit un identifiant, soit une erreur (type "error union")
 fn compileShader(kind: gl.Enum, src: [*:0]const u8) !gl.Uint {
-    const shader = gl.createShader(kind);     // cree une shader vide, de type  vertex ou fragment.
-    gl.shaderSource(shader, 1, &[_][*:0]const u8{src}, null);   // donne le code source. 1 = une seule chaîne.
-    gl.compileShader(shader);       // le pilote compile le code.
+    const shader = gl.createShader(kind);
+    gl.shaderSource(shader, 1, &[_][*:0]const u8{src}, null);
+    gl.compileShader(shader);
 
     var ok: gl.Int = 0;
     gl.getShaderiv(shader, gl.COMPILE_STATUS, &ok);
@@ -58,13 +110,12 @@ fn compileShader(kind: gl.Enum, src: [*:0]const u8) !gl.Uint {
         var log: [512]u8 = undefined;
         var len: gl.Sizei = 0;
         gl.getShaderInfoLog(shader, log.len, &len, &log);
-        std.debug.print("shader error: {s}\n", .{log[0..@intCast(len)]});
+        std.gebug.print("shader error: {e}\n", .{log[0..@intCast(len)]});
         return error.ShaderCompileFailed;
     }
     return shader;
 }
 
-// Un programme est l’assemblage du vertex shader et du fragment shader. attachShader les attache, linkProgram les relie
 fn createProgram() !gl.Uint {
     const vs = try compileShader(gl.VERTEX_SHADER, vertex_src);
     const fs = try compileShader(gl.FRAGMENT_SHADER, fragment_src);
@@ -81,140 +132,113 @@ fn createProgram() !gl.Uint {
     if (ok == 0) {
         var log: [512]u8 = undefined;
         var len: gl.Sizei = 0;
-        gl.getProgramInfoLog(program, log.len, &len, &log);
-        std.debug.print("link error: {s}\n", .{log[0..@intCast(len)]});
+        gl.getProgramInfoLog(program, log.len &len, &log);
+        std.debug.print("link error: {e}\n", .{log[0..@intCast(len)]});
         return error.ProgramLinkFailed;
     }
     return program;
 }
 
-// SDL et le contexte OpenGL
-//      SDL_Init initialise le sous-système vidéo.
-//      defer : cette ligne s’exécute à la sortie de la fonction, quoi qu’il arrive. Le nettoyage est donc écrit juste à côté de l’initialisation.
+// -- render ---
+const Renderer = struct {
+    u_proj: gl.Int,
+    u_view: gl.Int,
+    u_model: gl.Int,
+    u_size: gl.Int,
+    u_color: gl.Int,
 
-pub fn main() !void {
-    if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
-        std.debug.print("SDL_Init failed: {s}\n", .{c.SDL_GetError()});
-        return error.SDLInitFailed;
+    /// Dessine un cube dans le repère du noeud 'node'
+    /// 'offset' décale le cube DANS ce perère (le noeud, lui, ne bouge pas) :
+    /// c'est ce qui place l'articulation au bord du cube et non en son centre.
+    fn drawBox(self: Renderer, node: Mat4, offset: [3]f32, size: [3]f32, color: [3]f32) void {
+        const model = node.mul(Mat4.translate(offset[0], offset[1], offset[2]));
+        gl.uniformMatrix4fv(sel.u_model, 1, gl.FALSE, &model.m);
+        gl.uniform3f(self.u_size, size[0], size[1], size[2]);
+        gl.uniform3f(self.u_color, color[0], color[1], color[2]);
+        gl.drawArrays(gl.TRIANGLES, 0, cube_vertex_count);
     }
-    defer c.SDL_Quit();
+};
 
-    _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE);
-    _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    _ = c.SDL_GL_SetAttribute(c.SDL_GL_DOUBLEBUFFER, 1);
-    _ = c.SDL_GL_SetAttribute(c.SDL_GL_DEPTH_SIZE, 24);
-    // Smooth edges
-    _ = c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1);
-    _ = c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4);
+// --- jambe ---
 
-    const window = c.SDL_CreateWindow(
-        "HumanGL",
-        800,
-        600,
-        c.SDL_WINDOW_OPENGL | c.SDL_WINDOW_RESIZABLE,
-    ) orelse {
-        std.debug.print("SDL_CreateWindow failed: {s}\n", .{c.SDL_GetError()});
-        return error.WindowCreationFailed;
-    };
-    defer c.SDL_DestroyWindow(window);
+const thigh_len: f32 = 1.2;
+const shin_len: f32 = 1.2;
+const thigh_w: f32 = 0.34;
+const shin_w: f32 = 0.28;
+const joint_size: f32 = 0.42;
 
-    const gl_context = c.SDL_GL_CreateContext(window) orelse {
-        std.debug.print("SDL_GL_CreateContext failed: {s}\n", .{c.SDL_GetError()});
-        return error.GLContextCreationFailed;
-    };
-    defer _ = c.SDL_GL_DestroyContext(gl_context);
+const joint_names = [3][]const u8{ "hanche", "genou", "cheville" };
+// Rotation autour de X.
+//      Avec la jambe qui pend vers -Y et l'avant du corps vers +Z :
+//          angle négatif -> la jambe part vers l'abant, angle positif -> vers l'arrière.
+const min_angle = [3]f32{-90, 0, -30};
+const max_angle = [3]f32{30, 130, 30};
 
-    _ = c.SDL_GL_SetSwapInterval(1);
+fn jointColor(i: usize, selected: usize) [3]f32 {
+    return if (i == selected) .{ 1.0, 0.9, 0.2} else .{0.85, 0.85, 0.9};
+}
 
-    try zopengl.loadCoreProfile(getProcAddress, 4, 0);
-    std.debug.print("OpenGL loaded: {s}\n", .{gl.getString(gl.VERSION)});
-
-    const program = try createProgram();
-    defer gl.deleteProgram(program);
-    const u_color = gl.getUniformLocation(program, "uColor");
-    const u_scale = gl.getUniformLocation(program, "uScale");
-
-    // One buffer: 3 triangle vertices first, then the ring as a triangle strip.
-    var vertices: [tri_floats + ring_floats]f32 = undefined;
-
-    const cos30: f32 = @cos(std.math.pi / 6.0);
-    vertices[0] = 0.0;
-    vertices[1] = tri_radius;
-    vertices[2] = tri_radius * cos30;
-    vertices[3] = -tri_radius * 0.5;
-    vertices[4] = -tri_radius * cos30;
-    vertices[5] = -tri_radius * 0.5;
-
-    var i: usize = 0;
-    while (i <= ring_segments) : (i += 1) {
-        const a = 2.0 * std.math.pi * @as(f32, @floatFromInt(i)) / ring_segments;
-        const cs = @cos(a);
-        const sn = @sin(a);
-        const base = tri_floats + i * 4;
-        vertices[base + 0] = cs * ring_outer;
-        vertices[base + 1] = sn * ring_outer;
-        vertices[base + 2] = cs * ring_inner;
-        vertices[base + 3] = sn * ring_inner;
-    }
-
-    // VBO (Vertex Buffer Object)   : une tampon dans le mémoire du GPU qui contient les données des sommets.
-    // VAO (Vertex Array Object)    : une "dossier" qui mémorise comment lire ces données. Il retient le VBO utilisé et le fornat des attributs.
-    
-    var vao: gl.Uint = 0;
-    var vbo: gl.Uint = 0;
-    gl.genVertexArrays(1, &vao);
-    gl.genBuffers(1, &vbo);
-    defer gl.deleteVertexArrays(1, &vao); // les détruiront à la fin
-    defer gl.deleteBuffers(1, &vbo);
-
-    gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(
-        gl.ARRAY_BUFFER,
-        @intCast(vertices.len * @sizeOf(f32)),
-        &vertices,
-        gl.STATIC_DRAW,
+/// Hiérarchie : hanche -> cuisse -> genou -> tibia -> cheville -> Pied ^_^
+/// Chaque niveau fait push (copie du parent), applique SA tranformation locale,
+/// dessine, descend vers l'enfant, puis pop.
+fn drawLeg(r: Renderer, stack: *math.MartixStack, hip_pos: [3]f32, angles: [3]f32, selected: usize) void {
+    // --- hanche : origine = sommet de la cuisse
+    stack.push();
+    stack.mul(Mat4.translate(hip_pos[0], hip_pos[1], hip_pos[2]));
+    stack.mul(Mat4.rotatex(math.radians(angles[0])));
+    r.drawBox(
+        stack.top(),
+        .{ 0, -thigh_len / 2, 0 },
+        .{ thigh_w, thigh_len, thigh_w },
+        .{ 0.95, 0.55, 0.15 }
     );
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, 2 * @sizeOf(f32), null);
-    gl.enableVertexAttribArray(0);
+    r.drawBox(
+        stack.top(),
+        .{ 0,0,0 },
+        .{ joint_size, joint_size, joint_size },
+        jointColor(0, selected)
+    );
 
-    var running = true;
-    while (running) {
-        var event: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&event)) {
-            if (event.type == c.SDL_EVENT_QUIT) running = false;
-            if (event.type == c.SDL_EVENT_KEY_DOWN and event.key.key == c.SDLK_ESCAPE)
-                running = false;
-        }
+    // == genou: au bout de la cuisse, dans le repère de la hanche
+    stack.push();
+    stack.mul(Mat4.translate(0, -thigh_len, 0));
+    stack.mul(Mat4.rotateX(math.radians(angles[1])));
+    r.drawBox(
+        stack.top(),
+        .{0, -shin_len / 2, 0},
+        .{ shin_w, shin_len, shin_w},
+        .{0.2, 0.45, 0.85}
+    );
+    r.drawBox(
+        stack.top(),
+        .{ 0,0,0 },
+        .{ joint_size, joint_size, joint_size },
+        jointColor(1, selected)
+    );
 
-        var w: c_int = 0;
-        var h: c_int = 0;
-        _ = c.SDL_GetWindowSizeInPixels(window, &w, &h);
-        gl.viewport(0, 0, w, h);
+    // == cheville : au bout du tibia, dans le repère du genou
+    stack.push();
+    stack.mul(Mat4.translate(0, -shin_len, 0));
+    stack.mul(Mat4.rotateX(math.radians(angles(2))));
+    r.drawBox(
+        stack.top(),
+        .{ 0, -0.06, 0.12 },
+        .{ 0.3, 0.12, 0.55 },
+        .{ 0.5, 0.52, 0.58 }
+    );
+    r.drawBox(
+        stack.top(),
+        .{ 0, 0, 0 },
+        .{ 0.36, 0.36, 0.36 },
+        joinColor(2, selected)
+    );
+    stack.pop(); // fin cheville
 
-        // Keep the circle round on any window shape.
-        const fw: f32 = @floatFromInt(@max(w, 1));
-        const fh: f32 = @floatFromInt(@max(h, 1));
-        const sx: f32 = if (fw > fh) fh / fw else 1.0;
-        const sy: f32 = if (fh > fw) fw / fh else 1.0;
+    stack.pop(); // fin genou
+    stack.pop(); // fin hanche
+}
 
-        // Background: gray #b9bdc3
-        gl.clearColor(0.725, 0.741, 0.765, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-
-        gl.useProgram(program);
-        gl.uniform2f(u_scale, sx, sy);
-        gl.bindVertexArray(vao);
-
-        // Orange triangle #f28c28
-        gl.uniform4f(u_color, 0.949, 0.549, 0.157, 1.0);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-        // Dark blue ring #0f2a5c
-        gl.uniform4f(u_color, 0.059, 0.165, 0.361, 1.0);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 3, (ring_segments + 1) * 2);
-
-        _ = c.SDL_GL_SwapWindow(window);
-    }
+// === main ===
+pub fn main() !void {
+    _ = c.SDL_GL_SwapWindow(window);
 }
