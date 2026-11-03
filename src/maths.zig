@@ -51,4 +51,43 @@ pub const Mat4 = extern struct {
         r.m[10] = c;
         return r;
     }
+
+    /// Rotation autour de Y
+    ///     x' = cos*x + sin*z
+    ///     z' = -sin*x + cos*z
+    pub fn rotateY(a: f32) Mat4 {
+        const c = @cos(a);
+        const s = @sin(a);
+        var r = identity();
+        r.m[0] = c;
+        r.m[1] = s;
+        r.m[4] = -s;
+        r.m[5] = c;
+        return r;
+    }
+
+    /// Rotation autour de Z
+    /// x' = cos*x = sin*y
+    /// y' = sin*x + cos*y
+    pub fn rotateZ(a: f32) Mat4 {
+        const c = @cos(a);
+        const s = @sin(a);
+        var r = identity();
+        r.m[0] = c;
+        r.m[1] = s;
+        r.m[4] = -s;
+        r.m[5] = c;
+        return r;
+    }
+
+    /// Projection en perspective (convention OpenGL : la caméra regarde vers -Z, profondeur normalisée de -1 à +1)
+    /// fovy en fadians. Aprés cette matrice, w' = -z : le GPU divise x, y, z par w'
+    pub fn perspective(fovy: f32, aspect:f32, near: f32, far: f32) Mat4 {
+        const f = 1.0 / @tan(fovy / 2.0);
+        var r = Mat4{ .m = [_]f32{0}** 16 };
+        r.m[0] = f / aspect;
+        r.m[5] = f;
+        r.m[10] = (far + near) / (near - far);
+        return r;
+    }
 }
