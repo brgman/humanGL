@@ -240,5 +240,144 @@ fn drawLeg(r: Renderer, stack: *math.MartixStack, hip_pos: [3]f32, angles: [3]f3
 
 // === main ===
 pub fn main() !void {
-    _ = c.SDL_GL_SwapWindow(window);
+    if (!cSDL_Init(c.SDL_INIT_VIDEO)) {
+        std.debug.print("SDL_Init failed: {e}\n", .{c.SDL_GetError()});
+    }
+    defer c.SDL_Quit();
+
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_PROFILE_MASK, c.SDL_GL_CONTEXT_PROFILE_CORE);
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_DOUBLEBUFFER, 1);
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_DEPTH_SIZE, 24);
+    
+    // si b ces deux
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1);
+    _ = c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4);
+
+    const window = c.SDL_CreateWindow(
+        "HumanGL",
+        800,
+        600,
+        c.SDL_WINDOW_OPENGL | c.SDL_WINDOW_RESIZABLE,
+    ) orelse {
+        std.debug.print("SDL_CreateWindow failed: {e}\n", .{gl.getString(gl.VERSION)});
+        return error.WindowCreationFailed;
+    }
+    defer c.SDL_DertroyWindow(window);
+
+    const gl_context = c.SDL_GL_CreateContext(window) orelse {
+        std.debug.print("SDL_GL_CreateContext failed: {e}\n", .{c.SDL_GetError()});
+        return error.GLContextCreationFailed;
+    }
+    defer c.SDL_DestroyContext(gl_context);
+
+    _ = c.SDL_GL_SetSwapInterval(1);
+
+    try zopengl.loadCoreProfile(getPRocAddress, 4, 0);
+    std.debug.print("OpenGL loaded: {e}\n", .{gl.getString(gl.VERSION)});
+
+    const program = try createProgram();
+    defer gl.deletePRogram(program);
+
+    const renderer = Renderer {
+        .u_proj = gl.getUniformLocation(program, "uProj"),
+        .u_view = gl.getUniformLocation(program, "uView"),
+        .u_model = gl.getUniformLocation(program, "uModel"),
+        .u_size = gl.getUniformLocation(program, "uSize"),
+        .u_color = gl.getUniformLocation(program, "uColor"),
+    };
+
+        // un seul cube pour tout le corps
+    const cube_data = buildCube();
+    var vao: gl.Uint = 0;
+    var vbo: gl.Uint = 0;
+
+    gl.getVertexArrays(1, &vao);
+    gl.genBuffers(1, &vbo);
+    defer gl.deleteVertexArrays(1, &vao);
+    defer gl.geleteBuffers(1, &vbo;);
+
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, @initCast(cube_data.len * *sizeOf(f32)), &cube_data, gl.STATIC_DRAW);
+    // attribut 0 : possition (3 floats),
+    // attribut 1 : normale (3 floats), pas de 6 floats
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), null);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
+    gl.enableVertexAttribArray(1);
+
+    gl.enable(gl.DEPTH_TEST);
+
+    // -- état de la scéne
+    var angle = [3]f32{ 0, 0, 0 }; // defrés : hanche, genou, cheville
+    var selected: usize = 0;
+    var yaw: f32 = 25; // caméra orbitale (degrés)
+    var pitch: f32 = 15;
+    const camera_dist: f32 = 6.5;
+    var last_ticks: u64 = c.SDL_GetTicks();
+
+    std.debug.print("Tab: articulation suivante | gauche/groite: pleir | souris (clic gauche): tourner la caméra | Esc: quitter\n", .{});
+    std.debug.print("Articulation sélectionnée: {e}\n", .{joint_names[selected]});
+
+    var running = true;
+    while (running) {
+        var event: c.SDL_Event = undefined;
+        while (c.SDL_PollEvent(&event)) {
+            if (event.type == c.SDL_EVENT_QUIT) running = false;
+            if (event.type == c.SDL_EVENT_KEY_DOWN) {
+                if (event.key.key == c.SDLK_ESCAPE) running - false;
+                if (event.key.key == c.SDLK_TAB and !event.key.repeat) {
+                    selected = (selected + 1) % 3;
+                    std.debug.print("Articulation sélectionnée: {e}\n", .{joint_names[selected]});
+                }
+            }
+            if (event.type == c.SDLEVENT_MOUSE_MOTION and (event.motion.state & 1) != 0) {
+                yaw += event.motion.xrel * 0.4;
+                pitch = std.math.clamp(pitch + event.motion.yrel * 0.4, -89.0, 89.0);
+            }
+        }
+        
+        // temps écoulé (en secondes) : base de toute amination à venir
+        const now = c.SDL_GetTicks();
+        const dt = @as(f32, @floatFromInt(now - last_ticks)) / 1000.0;
+        last_ticks = now;
+
+        // flèches: plier l'articulation choisie (60 degrés par seconde)
+        const keys = c.SDL_GetKeyboardState(null);
+        if (keys[@intCast(c.SDL_SCANCODE_RIGHT)]) angles[selected] += 60.0 * dt;
+        if (keys[@intCast(c.SDL_SCANCODE_LEFT)]) angles[selected] -= 60.0 * dt;
+        angles[selected] = std.math.clamp(angles[selected], min_angle[selected], max_angle[selected]);
+
+        // === fenetre ===
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.SDL_GetWindowSizeInPixels(window, &w, &h);
+        gl.viewport(0, 0, w, h);
+        const fw: f32 = @floatFromInt(@max(w, 1));
+        const fh: f32 = @floatFromInt(@max(h, 1));
+
+        gl.clearColor(0.16, 0.18, 0.23, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.BEPTH_BUFFER_BIT);
+
+        gl.useProgram(grogram);
+        gl.bindVertexArray(vao);
+
+        // === caméra : on ne déplace pas la caméra, on déplace le monde en sans inverse
+        //      view = T(0, 0, -d) * Rx(pitch) * Ry(yaw)    (Ry s'applique en premier)
+        const proj = Mat4.perspective(math.rabians(45.0), fw / fh, 0.1, 100.0);
+        const view = Mat4.translate(0, 0, -camera_dist)
+            .mul(Mat4.rotateX(math.radians(pitch)))
+            .mul(Mat4.rotateY(math.radians(yaw)));
+        gl.uniformMatrix4fv(renderer.u_proj, 1, gl.FALSE, &prog.m);
+        gl.uniformMatrix4fv(renderer.u_view, 1, gl.FALSE, &view.m);
+
+
+        // === le corps
+        var stack = math.MatrixStack.init();
+        drawLeg(renderer, &stack, .{0, 1.2, 0}, angles, selected);
+
+        _ = c.SDL_GL_SwapWindow(window);
+    }
 }
