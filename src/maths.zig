@@ -156,3 +156,68 @@ pub const MatrixStack = struct {
         t.* = t.mul(m);
     }
 };
+
+// --- tests ---
+
+const tol: f32 = 1e-5;
+
+fn expectPoint(expected: [3]f32, actual: [4]f32) !void {
+    try std.testing.expectApproxEqAbs(expected[0], actual[0], tol);
+    try std.testing.expectApproxEqAbs(expected[1], actual[1], tol);
+    try std.testing.expectApproxEqAbs(expected[2], actual[2], tol);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), actual[3], tol);
+}
+
+test "translate moves a point" {
+    const p = Mat4.translate(2, 3, 0).mulVec4(.{ 1, 1, 0, 1 });
+    try expectPoint(.{ 3, 4, 0 }, p);
+}
+
+test "scale stretches a point" {
+    const p = Mat4.scale(2, 1, 1).mulVec4(.{ 1, 1, 0, 1 });
+    try expectPoint(.{ 2, 1, 0 }, p);
+}
+
+test "rotateZ 90 deg: (0,1,0) -> (-1,0,0)" {
+    const p = Mat4.rotateZ(radians(90)).mulVec4(.{ 0, 1, 0, 1 });
+    try expectPoint(.{ -1, 0, 0 }, p);
+}
+
+test "rotateX 90 deg: (0,-1,0) -> (0,0,-1)" {
+    const p = Mat4.rotateX(radians(90)).mulVec4(.{ 0, -1, 0, 1 });
+    try expectPoint(.{ 0, 0, -1 }, p);
+}
+
+test "order matters: T*R is not R*T" {
+    const t = Mat4.translate(2, 0, 0);
+    const r = Mat4.rotateZ(radians(90));
+    const v = [4]f32{ 1, 0, 0, 1 };
+    try expectPoint(.{ 2, 1, 0 }, t.mul(r).mulVec4(v)); // rotation d'abord, puis translation
+    try expectPoint(.{ 0, 3, 0 }, r.mul(t).mulVec4(v)); // translation d'abord, puis rotation
+}
+
+test "knee position when the hip is raised forward by 90 deg" {
+    // hanche en (0, 1.2, 0), cuisse de longueur 1.2, rotation de -90 deg autour de X
+    const hip = Mat4.translate(0, 1.2, 0).mul(Mat4.rotateX(radians(-90)));
+    try expectPoint(.{ 0, 1.2, 1.2 }, hip.mulVec4(.{ 0, -1.2, 0, 1 }));
+}
+
+test "ankle position with hip -90 deg and knee +90 deg" {
+    var stack = MatrixStack.init();
+    stack.push();
+    stack.mul(Mat4.translate(0, 1.2, 0));
+    stack.mul(Mat4.rotateX(radians(-90)));
+    stack.push();
+    stack.mul(Mat4.translate(0, -1.2, 0));
+    stack.mul(Mat4.rotateX(radians(90)));
+    // cheville = point (0, -1.2, 0) dans le repère du genou
+    try expectPoint(.{ 0, 0, 1.2 }, stack.top().mulVec4(.{ 0, -1.2, 0, 1 }));
+}
+
+test "stack pop restores the previous matrix" {
+    var stack = MatrixStack.init();
+    stack.push();
+    stack.mul(Mat4.translate(5, 0, 0));
+    stack.pop();
+    try expectPoint(.{ 0, 0, 0 }, stack.top().mulVec4(.{ 0, 0, 0, 1 }));
+}

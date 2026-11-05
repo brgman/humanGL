@@ -280,6 +280,8 @@ pub fn main() !void {
     var pitch: f32 = 15;
     const camera_dist: f32 = 6.5;
     var last_ticks: u64 = c.SDL_GetTicks();
+    var auto_rotate = true;
+    const auto_speed: f32 = 30.0; // degrees per second
 
     std.debug.print("Tab: articulation suivante | gauche/droite: plier | souris (clic gauche): tourner la caméra | Esc: quitter\n", .{});
     std.debug.print("Articulation sélectionnée: {s}\n", .{joint_names[selected]});
@@ -294,6 +296,9 @@ pub fn main() !void {
                 if (event.key.key == c.SDLK_TAB and !event.key.repeat) {
                     selected = (selected + 1) % 3;
                     std.debug.print("Articulation sélectionnée: {s}\n", .{joint_names[selected]});
+                }
+                if (event.key.key == c.SDLK_SPACE and !event.key.repeat) {
+                    auto_rotate = !auto_rotate;
                 }
             }
             if (event.type == c.SDL_EVENT_MOUSE_MOTION and (event.motion.state & 1) != 0) {
@@ -326,7 +331,11 @@ pub fn main() !void {
 
         gl.useProgram(program);
         gl.bindVertexArray(vao);
-        gl.rotateX();
+        const dragging = (c.SDL_GetMouseState(null, null) & c.SDL_BUTTON_LMASK) != 0;
+        if (auto_rotate and !dragging) {
+            yaw = @mod(yaw + auto_speed * dt, 360.0);
+        }
+        // gl.rotateX();
 
         // === caméra : on ne déplace pas la caméra, on déplace le monde en sans inverse
         //      view = T(0, 0, -d) * Rx(pitch) * Ry(yaw)    (Ry s'applique en premier)
