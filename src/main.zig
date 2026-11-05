@@ -157,25 +157,29 @@ const Renderer = struct {
 
 const thigh_len: f32 = 1.2;
 const shin_len: f32 = 1.2;
-const thigh_w: f32 = 0.34;
-const shin_w: f32 = 0.28;
-const joint_size: f32 = 0.42;
+const thigh_w: f32 = 0.2;
+const shin_w: f32 = 0.2;
+const joint_size: f32 = 0.2;
 
-const joint_names = [3][]const u8{ "hanche", "genou", "cheville" };
+const joint_names = [6][]const u8{
+    "hanche G", "genou G", "cheville G",
+    "hanche D", "genou D", "cheville D"
+ };
 // Rotation autour de X.
 //      Avec la jambe qui pend vers -Y et l'avant du corps vers +Z :
 //          angle négatif -> la jambe part vers l'abant, angle positif -> vers l'arrière.
 const min_angle = [3]f32{-90, 0, -30};
 const max_angle = [3]f32{30, 130, 30};
 
-fn jointColor(i: usize, selected: usize) [3]f32 {
-    return if (i == selected) .{ 1.0, 0.9, 0.2} else .{0.85, 0.85, 0.9};
+fn jointColor(i: usize, selected: ?usize) [3]f32 {
+    const is_selected = if (selected) |s| s == i else false;
+    return if (is_selected) .{ 1.0, 0.9, 0.2 } else .{ 0.85, 0.85, 0.9 };
 }
 
 /// Hiérarchie : hanche -> cuisse -> genou -> tibia -> cheville -> Pied ^_^
 /// Chaque niveau fait push (copie du parent), applique SA tranformation locale,
 /// dessine, descend vers l'enfant, puis pop.
-fn drawLeg(r: Renderer, stack: *math.MatrixStack, hip_pos: [3]f32, angles: [3]f32, selected: usize) void {
+fn drawLeg(r: Renderer, stack: *math.MatrixStack, hip_pos: [3]f32, angles: [3]f32, selected: ?usize) void {
     // --- hanche : origine = sommet de la cuisse
     stack.push();
     stack.mul(Mat4.translate(hip_pos[0], hip_pos[1], hip_pos[2]));
@@ -194,8 +198,8 @@ fn drawLeg(r: Renderer, stack: *math.MatrixStack, hip_pos: [3]f32, angles: [3]f3
     stack.push();
     stack.mul(Mat4.translate(0, -shin_len, 0));
     stack.mul(Mat4.rotateX(math.radians(angles[2])));
-    r.drawBox(stack.top(), .{ 0, -0.06, 0.12 }, .{ 0.3, 0.12, 0.55 }, .{ 0.5, 0.52, 0.58 });
-    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ 0.36, 0.36, 0.36 }, jointColor(2, selected));
+    r.drawBox(stack.top(), .{ 0, -0.06, 0.12 }, .{ thigh_w, 0.12, 0.55 }, .{ 0.5, 0.52, 0.58 });
+    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ joint_size, joint_size, joint_size }, jointColor(2, selected));
     stack.pop(); // fin cheville
 
     stack.pop(); // fin genou
@@ -274,8 +278,8 @@ pub fn main() !void {
     gl.enable(gl.DEPTH_TEST);
 
     // -- état de la scéne
-    var angles = [3]f32{ 0, 0, 0 }; // degrés : hanche, genou, cheville
-    var selected: usize = 0;
+    var angles = [2][3]f32{ .{ 0, 0, 0 }, .{ 0, 0, 0 } }; // degrés : hanche, genou, cheville
+    var selected: usize = 0; // 0..5
     var yaw: f32 = 25; // caméra orbitale (degrés)
     var pitch: f32 = 15;
     const camera_dist: f32 = 6.5;
@@ -294,7 +298,7 @@ pub fn main() !void {
             if (event.type == c.SDL_EVENT_KEY_DOWN) {
                 if (event.key.key == c.SDLK_ESCAPE) running = false;
                 if (event.key.key == c.SDLK_TAB and !event.key.repeat) {
-                    selected = (selected + 1) % 3;
+                    selected = (selected + 1) % 6;
                     std.debug.print("Articulation sélectionnée: {s}\n", .{joint_names[selected]});
                 }
                 if (event.key.key == c.SDLK_SPACE and !event.key.repeat) {
@@ -313,11 +317,13 @@ pub fn main() !void {
         last_ticks = now;
 
         // flèches: plier l'articulation choisie (60 degrés par seconde)
+        const leg = selected / 3;
+        const joint = selected % 3;
         const keys = c.SDL_GetKeyboardState(null);
-        if (keys[@intCast(c.SDL_SCANCODE_RIGHT)]) angles[selected] += 60.0 * dt;
-        if (keys[@intCast(c.SDL_SCANCODE_LEFT)]) angles[selected] -= 60.0 * dt;
-        angles[selected] = std.math.clamp(angles[selected], min_angle[selected], max_angle[selected]);
-
+        if (keys[@intCast(c.SDL_SCANCODE_RIGHT)]) angles[leg][joint] += 60.0 * dt;
+        if (keys[@intCast(c.SDL_SCANCODE_LEFT)]) angles[leg][joint] -= 60.0 * dt;
+        angles[leg][joint] = std.math.clamp(angles[leg][joint], min_angle[joint], max_angle[joint]);
+                
         // === fenetre ===
         var w: c_int = 0;
         var h: c_int = 0;
@@ -349,8 +355,9 @@ pub fn main() !void {
 
         // === le corps
         var stack = math.MatrixStack.init();
-        drawLeg(renderer, &stack, .{0, 1.2, 0}, angles, selected);
-
+        const sel_joint: usize = selected % 3;
+        drawLeg(renderer, &stack, .{ -0.35, 1.2, 0 }, angles[0], if (leg == 0) sel_joint else null);
+        drawLeg(renderer, &stack, .{ 0.35, 1.2, 0 }, angles[1], if (leg == 1) sel_joint else null);
         _ = c.SDL_GL_SwapWindow(window);
     }
 }
