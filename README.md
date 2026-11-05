@@ -34,3 +34,10 @@ export PATH="$HOME/.config/Code/User/globalStorage/ziglang.vscode-zig/zig/x86_64
 zig version
 make run
 ```
+
+# Fonctions OpenGl
+
+Les noms sont ceux de `zopengl.bindings` (alias `gl` dans le code). La fonction C correspondante porte le préfixe `gl` et une majuscule : `gl.clear` correspond à `glClear`, `gl.drawArrays` à `glDrawArrays`.
+
+## Sources
+https://www.youtube.com/watch?v=GnoauFXoxwo&list=PLfyiNADFEW5dE5hJ4xWGbIOGu3V2k3iru
