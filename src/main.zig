@@ -1,7 +1,7 @@
 const std = @import("std");
 const zopengl = @import("zopengl");
 const c = @import("c");
-const math = @import("math.zig");
+const math = @import("maths.zig");
 
 const gl = zopengl.bindings;
 const Mat4 = math.Mat4;
@@ -21,8 +21,8 @@ const vertex_src =
     \\uniform mat4 uProj;
     \\uniform mat4 uView;
     \\uniform mat4 uModel;
-    \\uniform mat4 uSize;
-    \\out vec3 vNormal; 
+    \\uniform vec3 uSize;
+    \\out vec3 vNormal;
     \\void main() {
     \\    vNormal = mat3(uModel) * aNormal;
     \\    gl_Position = uProj * uView * uModel * vec4(aPos * uSize, 1.0);
@@ -48,23 +48,17 @@ const fragment_src =
 const cube_vertex_count = 36;
 
 fn buildCube() [cube_vertex_count * 6]f32 {
-    // pour chaque face : normale, axe u, axe v (u * v = normale)
-    const faces = [6][3][3]f32 {
-        .{ .{0,0, 1}, .{ 1,0,0}, .{0,1,0} }, // +z
-        .{ .{0,0,-1}, .{-1,0,0}, .{0,1,0} }, // -z
-        .{ .{ 1,0,0}, .{0,0,-1}, .{0,1,0} }, // +x
-        .{ .{-1,0,0}, .{0,0,1},  .{0,1,0} }, // -x
-        .{ .{0, 1,0}, .{1,0,0}, .{0,0,-1} }, // +y
-        .{ .{0,-1,0}, .{1,0,0}, .{0,0, 1} }, // -y
+    // pour chaque face : normale, axe u, axe v (u x v = normale)
+    // position     colours     uv
+    const faces = [6][3][3]f32{
+        .{ .{ 0, 0, 1 }, .{ 1, 0, 0 }, .{ 0, 1, 0 } }, // +Z
+        .{ .{ 0, 0, -1 }, .{ -1, 0, 0 }, .{ 0, 1, 0 } }, // -Z
+        .{ .{ 1, 0, 0 }, .{ 0, 0, -1 }, .{ 0, 1, 0 } }, // +X
+        .{ .{ -1, 0, 0 }, .{ 0, 0, 1 }, .{ 0, 1, 0 } }, // -X
+        .{ .{ 0, 1, 0 }, .{ 1, 0, 0 }, .{ 0, 0, -1 } }, // +Y
+        .{ .{ 0, -1, 0 }, .{ 1, 0, 0 }, .{ 0, 0, 1 } }, // -Y
     };
-
-    const signs = [4][2]f32{
-        .{-1, -1 },
-        .{ 1, -1},
-        .{ 1,  1},
-        .{-1,  1},
-    };
-
+    const signs = [4][2]f32{ .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 }, .{ -1, 1 } };
     const order = [6]usize{ 0, 1, 2, 0, 2, 3 };
 
     var data: [cube_vertex_count * 6]f32 = undefined;
@@ -110,7 +104,7 @@ fn compileShader(kind: gl.Enum, src: [*:0]const u8) !gl.Uint {
         var log: [512]u8 = undefined;
         var len: gl.Sizei = 0;
         gl.getShaderInfoLog(shader, log.len, &len, &log);
-        std.gebug.print("shader error: {e}\n", .{log[0..@intCast(len)]});
+        std.debug.print("shader error: {s}\n", .{log[0..@intCast(len)]});
         return error.ShaderCompileFailed;
     }
     return shader;
@@ -132,8 +126,8 @@ fn createProgram() !gl.Uint {
     if (ok == 0) {
         var log: [512]u8 = undefined;
         var len: gl.Sizei = 0;
-        gl.getProgramInfoLog(program, log.len &len, &log);
-        std.debug.print("link error: {e}\n", .{log[0..@intCast(len)]});
+        gl.getProgramInfoLog(program, log.len, &len, &log);
+        std.debug.print("link error: {s}\n", .{log[0..@intCast(len)]});
         return error.ProgramLinkFailed;
     }
     return program;
@@ -152,7 +146,7 @@ const Renderer = struct {
     /// c'est ce qui place l'articulation au bord du cube et non en son centre.
     fn drawBox(self: Renderer, node: Mat4, offset: [3]f32, size: [3]f32, color: [3]f32) void {
         const model = node.mul(Mat4.translate(offset[0], offset[1], offset[2]));
-        gl.uniformMatrix4fv(sel.u_model, 1, gl.FALSE, &model.m);
+        gl.uniformMatrix4fv(self.u_model, 1, gl.FALSE, &model.m);
         gl.uniform3f(self.u_size, size[0], size[1], size[2]);
         gl.uniform3f(self.u_color, color[0], color[1], color[2]);
         gl.drawArrays(gl.TRIANGLES, 0, cube_vertex_count);
@@ -181,57 +175,27 @@ fn jointColor(i: usize, selected: usize) [3]f32 {
 /// Hiérarchie : hanche -> cuisse -> genou -> tibia -> cheville -> Pied ^_^
 /// Chaque niveau fait push (copie du parent), applique SA tranformation locale,
 /// dessine, descend vers l'enfant, puis pop.
-fn drawLeg(r: Renderer, stack: *math.MartixStack, hip_pos: [3]f32, angles: [3]f32, selected: usize) void {
+fn drawLeg(r: Renderer, stack: *math.MatrixStack, hip_pos: [3]f32, angles: [3]f32, selected: usize) void {
     // --- hanche : origine = sommet de la cuisse
     stack.push();
     stack.mul(Mat4.translate(hip_pos[0], hip_pos[1], hip_pos[2]));
-    stack.mul(Mat4.rotatex(math.radians(angles[0])));
-    r.drawBox(
-        stack.top(),
-        .{ 0, -thigh_len / 2, 0 },
-        .{ thigh_w, thigh_len, thigh_w },
-        .{ 0.95, 0.55, 0.15 }
-    );
-    r.drawBox(
-        stack.top(),
-        .{ 0,0,0 },
-        .{ joint_size, joint_size, joint_size },
-        jointColor(0, selected)
-    );
+    stack.mul(Mat4.rotateX(math.radians(angles[0])));
+    r.drawBox(stack.top(), .{ 0, -thigh_len / 2, 0 }, .{ thigh_w, thigh_len, thigh_w }, .{ 0.95, 0.55, 0.15 });
+    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ joint_size, joint_size, joint_size }, jointColor(0, selected));
 
     // == genou: au bout de la cuisse, dans le repère de la hanche
     stack.push();
     stack.mul(Mat4.translate(0, -thigh_len, 0));
     stack.mul(Mat4.rotateX(math.radians(angles[1])));
-    r.drawBox(
-        stack.top(),
-        .{0, -shin_len / 2, 0},
-        .{ shin_w, shin_len, shin_w},
-        .{0.2, 0.45, 0.85}
-    );
-    r.drawBox(
-        stack.top(),
-        .{ 0,0,0 },
-        .{ joint_size, joint_size, joint_size },
-        jointColor(1, selected)
-    );
+    r.drawBox(stack.top(), .{ 0, -shin_len / 2, 0 }, .{ shin_w, shin_len, shin_w }, .{ 0.2, 0.45, 0.85 });
+    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ joint_size, joint_size, joint_size }, jointColor(1, selected));
 
     // == cheville : au bout du tibia, dans le repère du genou
     stack.push();
     stack.mul(Mat4.translate(0, -shin_len, 0));
-    stack.mul(Mat4.rotateX(math.radians(angles(2))));
-    r.drawBox(
-        stack.top(),
-        .{ 0, -0.06, 0.12 },
-        .{ 0.3, 0.12, 0.55 },
-        .{ 0.5, 0.52, 0.58 }
-    );
-    r.drawBox(
-        stack.top(),
-        .{ 0, 0, 0 },
-        .{ 0.36, 0.36, 0.36 },
-        joinColor(2, selected)
-    );
+    stack.mul(Mat4.rotateX(math.radians(angles[2])));
+    r.drawBox(stack.top(), .{ 0, -0.06, 0.12 }, .{ 0.3, 0.12, 0.55 }, .{ 0.5, 0.52, 0.58 });
+    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ 0.36, 0.36, 0.36 }, jointColor(2, selected));
     stack.pop(); // fin cheville
 
     stack.pop(); // fin genou
@@ -240,8 +204,9 @@ fn drawLeg(r: Renderer, stack: *math.MartixStack, hip_pos: [3]f32, angles: [3]f3
 
 // === main ===
 pub fn main() !void {
-    if (!cSDL_Init(c.SDL_INIT_VIDEO)) {
-        std.debug.print("SDL_Init failed: {e}\n", .{c.SDL_GetError()});
+    if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
+        std.debug.print("SDL_Init failed: {s}\n", .{c.SDL_GetError()});
+        return error.SDLInitFailed;
     }
     defer c.SDL_Quit();
 
@@ -261,26 +226,26 @@ pub fn main() !void {
         600,
         c.SDL_WINDOW_OPENGL | c.SDL_WINDOW_RESIZABLE,
     ) orelse {
-        std.debug.print("SDL_CreateWindow failed: {e}\n", .{gl.getString(gl.VERSION)});
+        std.debug.print("SDL_CreateWindow failed: {s}\n", .{c.SDL_GetError()});
         return error.WindowCreationFailed;
-    }
-    defer c.SDL_DertroyWindow(window);
+    };
+    defer c.SDL_DestroyWindow(window);
 
     const gl_context = c.SDL_GL_CreateContext(window) orelse {
-        std.debug.print("SDL_GL_CreateContext failed: {e}\n", .{c.SDL_GetError()});
+        std.debug.print("SDL_GL_CreateContext failed: {s}\n", .{c.SDL_GetError()});
         return error.GLContextCreationFailed;
-    }
-    defer c.SDL_DestroyContext(gl_context);
+    };
+    defer _ = c.SDL_GL_DestroyContext(gl_context);
 
     _ = c.SDL_GL_SetSwapInterval(1);
 
-    try zopengl.loadCoreProfile(getPRocAddress, 4, 0);
-    std.debug.print("OpenGL loaded: {e}\n", .{gl.getString(gl.VERSION)});
+    try zopengl.loadCoreProfile(getProcAddress, 4, 0);
+    std.debug.print("OpenGL loaded: {s}\n", .{gl.getString(gl.VERSION)});
 
     const program = try createProgram();
-    defer gl.deletePRogram(program);
+    defer gl.deleteProgram(program);
 
-    const renderer = Renderer {
+    const renderer = Renderer{
         .u_proj = gl.getUniformLocation(program, "uProj"),
         .u_view = gl.getUniformLocation(program, "uView"),
         .u_model = gl.getUniformLocation(program, "uModel"),
@@ -292,17 +257,15 @@ pub fn main() !void {
     const cube_data = buildCube();
     var vao: gl.Uint = 0;
     var vbo: gl.Uint = 0;
-
-    gl.getVertexArrays(1, &vao);
+    gl.genVertexArrays(1, &vao);
     gl.genBuffers(1, &vbo);
     defer gl.deleteVertexArrays(1, &vao);
-    defer gl.geleteBuffers(1, &vbo;);
+    defer gl.deleteBuffers(1, &vbo);
 
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, @initCast(cube_data.len * *sizeOf(f32)), &cube_data, gl.STATIC_DRAW);
-    // attribut 0 : possition (3 floats),
-    // attribut 1 : normale (3 floats), pas de 6 floats
+    gl.bufferData(gl.ARRAY_BUFFER, @intCast(cube_data.len * @sizeOf(f32)), &cube_data, gl.STATIC_DRAW);
+    // attribut 0 : position (3 floats), attribut 1 : normale (3 floats), pas de 6 floats
     gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), null);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
@@ -311,15 +274,15 @@ pub fn main() !void {
     gl.enable(gl.DEPTH_TEST);
 
     // -- état de la scéne
-    var angle = [3]f32{ 0, 0, 0 }; // defrés : hanche, genou, cheville
+    var angles = [3]f32{ 0, 0, 0 }; // degrés : hanche, genou, cheville
     var selected: usize = 0;
     var yaw: f32 = 25; // caméra orbitale (degrés)
     var pitch: f32 = 15;
     const camera_dist: f32 = 6.5;
     var last_ticks: u64 = c.SDL_GetTicks();
 
-    std.debug.print("Tab: articulation suivante | gauche/groite: pleir | souris (clic gauche): tourner la caméra | Esc: quitter\n", .{});
-    std.debug.print("Articulation sélectionnée: {e}\n", .{joint_names[selected]});
+    std.debug.print("Tab: articulation suivante | gauche/droite: plier | souris (clic gauche): tourner la caméra | Esc: quitter\n", .{});
+    std.debug.print("Articulation sélectionnée: {s}\n", .{joint_names[selected]});
 
     var running = true;
     while (running) {
@@ -327,18 +290,18 @@ pub fn main() !void {
         while (c.SDL_PollEvent(&event)) {
             if (event.type == c.SDL_EVENT_QUIT) running = false;
             if (event.type == c.SDL_EVENT_KEY_DOWN) {
-                if (event.key.key == c.SDLK_ESCAPE) running - false;
+                if (event.key.key == c.SDLK_ESCAPE) running = false;
                 if (event.key.key == c.SDLK_TAB and !event.key.repeat) {
                     selected = (selected + 1) % 3;
-                    std.debug.print("Articulation sélectionnée: {e}\n", .{joint_names[selected]});
+                    std.debug.print("Articulation sélectionnée: {s}\n", .{joint_names[selected]});
                 }
             }
-            if (event.type == c.SDLEVENT_MOUSE_MOTION and (event.motion.state & 1) != 0) {
+            if (event.type == c.SDL_EVENT_MOUSE_MOTION and (event.motion.state & 1) != 0) {
                 yaw += event.motion.xrel * 0.4;
                 pitch = std.math.clamp(pitch + event.motion.yrel * 0.4, -89.0, 89.0);
             }
         }
-        
+
         // temps écoulé (en secondes) : base de toute amination à venir
         const now = c.SDL_GetTicks();
         const dt = @as(f32, @floatFromInt(now - last_ticks)) / 1000.0;
@@ -359,18 +322,19 @@ pub fn main() !void {
         const fh: f32 = @floatFromInt(@max(h, 1));
 
         gl.clearColor(0.16, 0.18, 0.23, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.BEPTH_BUFFER_BIT);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-        gl.useProgram(grogram);
+        gl.useProgram(program);
         gl.bindVertexArray(vao);
+        gl.rotateX();
 
         // === caméra : on ne déplace pas la caméra, on déplace le monde en sans inverse
         //      view = T(0, 0, -d) * Rx(pitch) * Ry(yaw)    (Ry s'applique en premier)
-        const proj = Mat4.perspective(math.rabians(45.0), fw / fh, 0.1, 100.0);
+        const proj = Mat4.perspective(math.radians(45.0), fw / fh, 0.1, 100.0);
         const view = Mat4.translate(0, 0, -camera_dist)
             .mul(Mat4.rotateX(math.radians(pitch)))
             .mul(Mat4.rotateY(math.radians(yaw)));
-        gl.uniformMatrix4fv(renderer.u_proj, 1, gl.FALSE, &prog.m);
+        gl.uniformMatrix4fv(renderer.u_proj, 1, gl.FALSE, &proj.m);
         gl.uniformMatrix4fv(renderer.u_view, 1, gl.FALSE, &view.m);
 
 
