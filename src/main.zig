@@ -2,9 +2,17 @@ const std = @import("std");
 const zopengl = @import("zopengl");
 const c = @import("c");
 const math = @import("maths.zig");
+const leg = @import("leg.zig");
+const corp = @import("corp.zig");
 
 const gl = zopengl.bindings;
 const Mat4 = math.Mat4;
+
+const constants = @import("constants.zig");
+const joint_names = constants.joint_names;
+const pelvis_y = constants.pelvis_y;
+const auto_speed = constants.auto_speed;
+const camera_dist = constants.camera_dist;
 
 // --- shaders ---
 
@@ -49,7 +57,6 @@ const cube_vertex_count = 36;
 
 fn buildCube() [cube_vertex_count * 6]f32 {
     // pour chaque face : normale, axe u, axe v (u x v = normale)
-    // position     colours     uv
     const faces = [6][3][3]f32{
         .{ .{ 0, 0, 1 }, .{ 1, 0, 0 }, .{ 0, 1, 0 } }, // +Z
         .{ .{ 0, 0, -1 }, .{ -1, 0, 0 }, .{ 0, 1, 0 } }, // -Z
@@ -58,6 +65,12 @@ fn buildCube() [cube_vertex_count * 6]f32 {
         .{ .{ 0, 1, 0 }, .{ 1, 0, 0 }, .{ 0, 0, -1 } }, // +Y
         .{ .{ 0, -1, 0 }, .{ 1, 0, 0 }, .{ 0, 0, 1 } }, // -Y
     };
+
+    //   (y) v
+    //  ^   3(-1,+1) ---- 2(+1,+1)
+    //  \      |            |
+    //  \   0(-1,-1) ---- 1(+1,-1)
+    //  └──────────────────────> (x) u          from the center of facem
     const signs = [4][2]f32{ .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 }, .{ -1, 1 } };
     const order = [6]usize{ 0, 1, 2, 0, 2, 3 };
 
@@ -134,7 +147,7 @@ fn createProgram() !gl.Uint {
 }
 
 // -- render ---
-const Renderer = struct {
+pub const Renderer = struct {
     u_proj: gl.Int,
     u_view: gl.Int,
     u_model: gl.Int,
@@ -144,7 +157,7 @@ const Renderer = struct {
     /// Dessine un cube dans le repère du noeud 'node'
     /// 'offset' décale le cube DANS ce perère (le noeud, lui, ne bouge pas) :
     /// c'est ce qui place l'articulation au bord du cube et non en son centre.
-    fn drawBox(self: Renderer, node: Mat4, offset: [3]f32, size: [3]f32, color: [3]f32) void {
+    pub fn drawBox(self: Renderer, node: Mat4, offset: [3]f32, size: [3]f32, color: [3]f32) void {
         const model = node.mul(Mat4.translate(offset[0], offset[1], offset[2]));
         gl.uniformMatrix4fv(self.u_model, 1, gl.FALSE, &model.m);
         gl.uniform3f(self.u_size, size[0], size[1], size[2]);
@@ -152,78 +165,6 @@ const Renderer = struct {
         gl.drawArrays(gl.TRIANGLES, 0, cube_vertex_count);
     }
 };
-
-// --- jambe ---
-
-const thigh_len: f32 = 1.0;
-const shin_len: f32 = 1.0;
-const thigh_w: f32 = 0.2;
-const shin_w: f32 = 0.2;
-const joint_size: f32 = 0.201;
-
-const torso_w: f32 = 0.7;
-const torso_h: f32 = thigh_len * 1.5;
-const torso_d: f32 = thigh_w;
-const pelvis_y: f32 = 0.19;
-
-const joint_names = [7][]const u8{
-    "hanche G", "genou G", "cheville G",
-    "hanche D", "genou D", "cheville D",
-    "bassin"
- };
-
-// Rotation autour de X.
-//      Avec la jambe qui pend vers -Y et l'avant du corps vers +Z :
-//          angle négatif -> la jambe part vers l'abant, angle positif -> vers l'arrière.
-const min_angle = [7]f32{ -90, 0, -30, -90, 0, -30, -30 };
-const max_angle = [7]f32{ 30, 130, 30, 30, 130, 30, 90 };
-
-fn jointColor(i: usize, selected: ?usize) [3]f32 {
-    const is_selected = if (selected) |s| s == i else false;
-    return if (is_selected) .{ 1.0, 0.9, 0.2 } else .{ 0.85, 0.85, 0.9 };
-}
-
-/// Hiérarchie : hanche -> cuisse -> genou -> tibia -> cheville -> Pied ^_^
-/// Chaque niveau fait push (copie du parent), applique SA tranformation locale,
-/// dessine, descend vers l'enfant, puis pop.
-fn drawLeg(r: Renderer, stack: *math.MatrixStack, hip_pos: [3]f32, angles: [3]f32, selected: ?usize) void {
-    // --- hanche : origine = sommet de la cuisse
-    stack.push();
-    stack.mul(Mat4.translate(hip_pos[0], hip_pos[1], hip_pos[2]));
-    stack.mul(Mat4.rotateX(math.radians(angles[0])));
-    r.drawBox(stack.top(), .{ 0, -thigh_len / 2, 0 }, .{ thigh_w, thigh_len, thigh_w }, .{ 0.95, 0.55, 0.15 });
-    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ joint_size, joint_size, joint_size }, jointColor(0, selected));
-
-    // == genou: au bout de la cuisse, dans le repère de la hanche
-    stack.push();
-    stack.mul(Mat4.translate(0, -thigh_len, 0));
-    stack.mul(Mat4.rotateX(math.radians(angles[1])));
-    r.drawBox(stack.top(), .{ 0, -shin_len / 2, 0 }, .{ shin_w, shin_len, shin_w }, .{ 0.2, 0.45, 0.85 });
-    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ joint_size, joint_size, joint_size }, jointColor(1, selected));
-
-    // == cheville : au bout du tibia, dans le repère du genou
-    stack.push();
-    stack.mul(Mat4.translate(0, -shin_len, 0));
-    stack.mul(Mat4.rotateX(math.radians(angles[2])));
-    r.drawBox(stack.top(), .{ 0, -0.06, 0.12 }, .{ thigh_w, 0.12, 0.55 }, .{ 0.5, 0.52, 0.58 });
-    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ joint_size, joint_size, joint_size }, jointColor(2, selected));
-    stack.pop(); // fin cheville
-
-    stack.pop(); // fin genou
-    stack.pop(); // fin hanche
-}
-
-fn drawTorso(r: Renderer, stack: *math.MatrixStack, pos: [3]f32, angle: f32, selected: bool) void {
-    stack.push();
-    stack.mul(Mat4.translate(pos[0], pos[1], pos[2]));
-    stack.mul(Mat4.rotateX(math.radians(angle)));
-
-    r.drawBox(stack.top(), .{ 0, torso_h / 2, 0 }, .{ torso_w, torso_h, torso_d }, .{ 0.3, 0.7, 0.4 });
-
-    const col: [3]f32 = if (selected) .{ 1.0, 0.9, 0.2 } else .{ 0.85, 0.85, 0.9 };
-    r.drawBox(stack.top(), .{ 0, 0, 0 }, .{ torso_w, joint_size, joint_size }, col);
-    stack.pop();
-}
 
 // === main ===
 pub fn main() !void {
@@ -301,10 +242,8 @@ pub fn main() !void {
     var selected: usize = 0; // 0..6
     var yaw: f32 = 25; // caméra orbitale (degrés)
     var pitch: f32 = 15;
-    const camera_dist: f32 = 6.5;
     var last_ticks: u64 = c.SDL_GetTicks();
     var auto_rotate = true;
-    const auto_speed: f32 = 30.0; // degrees per second
 
     std.debug.print("Tab: articulation suivante | gauche/droite: plier | souris (clic gauche): tourner la caméra | Esc: quitter\n", .{});
     std.debug.print("Articulation sélectionnée: {s}\n", .{joint_names[selected]});
@@ -334,6 +273,12 @@ pub fn main() !void {
         const now = c.SDL_GetTicks();
         const dt = @as(f32, @floatFromInt(now - last_ticks)) / 1000.0;
         last_ticks = now;
+
+        // Rotation autour de X.
+        //      Avec la jambe qui pend vers -Y et l'avant du corps vers +Z :
+        //          angle négatif -> la jambe part vers l'abant, angle positif -> vers l'arrière.
+        const min_angle = [7]f32{ -90, 0, -30, -90, 0, -30, -30 };
+        const max_angle = [7]f32{ 30, 130, 30, 30, 130, 30, 90 };
 
         // flèches: plier l'articulation choisie (60 degrés par seconde)
         const keys = c.SDL_GetKeyboardState(null);
@@ -375,9 +320,9 @@ pub fn main() !void {
         const sel_right: ?usize = if (selected >= 3 and selected < 6) selected - 3 else null;
 
         var stack = math.MatrixStack.init();
-        drawLeg(renderer, &stack, .{ -0.35, pelvis_y, 0 }, angles[0..3].*, sel_left);
-        drawLeg(renderer, &stack, .{ 0.35, pelvis_y, 0 }, angles[3..6].*, sel_right);
-        drawTorso(renderer, &stack, .{ 0, pelvis_y, 0 }, angles[6], selected == 6);
+        leg.drawLeg(renderer, &stack, .{ -0.35, pelvis_y, 0 }, angles[0..3].*, sel_left);
+        leg.drawLeg(renderer, &stack, .{ 0.35, pelvis_y, 0 }, angles[3..6].*, sel_right);
+        corp.drawTorso(renderer, &stack, .{ 0, pelvis_y, 0 }, angles[6], selected == 6);
         _ = c.SDL_GL_SwapWindow(window);
     }
 }
