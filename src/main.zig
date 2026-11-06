@@ -2,25 +2,17 @@ const std = @import("std");
 const zopengl = @import("zopengl");
 const c = @import("c");
 const math = @import("maths.zig");
-const leg = @import("leg.zig");
-const corp = @import("corp.zig");
+const constants = @import("constants.zig");
+const body = @import("body.zig");
+const anim = @import("anim.zig");
 
 const gl = zopengl.bindings;
 const Mat4 = math.Mat4;
 
-const constants = @import("constants.zig");
-const joint_names = constants.joint_names;
-const pelvis_y = constants.pelvis_y;
-const auto_speed = constants.auto_speed;
-const camera_dist = constants.camera_dist;
-
 // --- shaders ---
-
-// Une *shader* est un petit programme qui s'exécute sur la carte graphique (GPU). Le pipeline graphique fonctionne ainsi:
-// 1.   Le CPU envoie des sommets (vertices) au GPU.
-// 2.   Le vertex shader s'exécute une fois par sommet et calcule sa position à l'écran.
-// 3.   La rastérisation transforme chaque triangle en pixels
-// 4.   Le fragment shader s'exécute une fois par pixel et calcule sa couleur.
+// Le vertex shader place chaque sommet a l'ecran, le fragment shader donne la couleur.
+// La normale suit la rotation du modele (mat3(uModel)). Le scale est applique sur les
+// axes de chaque boite, donc la direction de la normale reste juste apres normalize().
 
 const vertex_src =
     \\#version 400 core
@@ -29,11 +21,10 @@ const vertex_src =
     \\uniform mat4 uProj;
     \\uniform mat4 uView;
     \\uniform mat4 uModel;
-    \\uniform vec3 uSize;
     \\out vec3 vNormal;
     \\void main() {
     \\    vNormal = mat3(uModel) * aNormal;
-    \\    gl_Position = uProj * uView * uModel * vec4(aPos * uSize, 1.0);
+    \\    gl_Position = uProj * uView * uModel * vec4(aPos, 1.0);
     \\}
 ;
 
@@ -49,14 +40,13 @@ const fragment_src =
     \\}
 ;
 
-// --- cube ---
-// cube unité centré en (0,0,0), côté 1 : 6 faces x 2 triangles x 3 sommets,
-// chaque sommet = position (3 floats) + normale (3 floats)
+// --- cube 1x1x1 centre en (0,0,0) ---
+// 6 faces x 2 triangles x 3 sommets, chaque sommet = position (3) + normale (3)
 
 const cube_vertex_count = 36;
 
 fn buildCube() [cube_vertex_count * 6]f32 {
-    // pour chaque face : normale, axe u, axe v (u x v = normale)
+    // pour chaque face : normale, axe u, axe v
     const faces = [6][3][3]f32{
         .{ .{ 0, 0, 1 }, .{ 1, 0, 0 }, .{ 0, 1, 0 } }, // +Z
         .{ .{ 0, 0, -1 }, .{ -1, 0, 0 }, .{ 0, 1, 0 } }, // -Z
@@ -148,25 +138,75 @@ fn createProgram() !gl.Uint {
 
 // -- render ---
 pub const Renderer = struct {
+    program: gl.Uint,
+    vao: gl.Uint,
+    vbo: gl.Uint,
     u_proj: gl.Int,
     u_view: gl.Int,
     u_model: gl.Int,
-    u_size: gl.Int,
     u_color: gl.Int,
 
-    /// Dessine un cube dans le repère du noeud 'node'
-    /// 'offset' décale le cube DANS ce perère (le noeud, lui, ne bouge pas) :
-    /// c'est ce qui place l'articulation au bord du cube et non en son centre.
-    pub fn drawBox(self: Renderer, node: Mat4, offset: [3]f32, size: [3]f32, color: [3]f32) void {
-        const model = node.mul(Mat4.translate(offset[0], offset[1], offset[2]));
+    /// A appeler une fois que le contexte OpenGL est charge
+    pub fn init() !Renderer {
+        const program = try createProgram();
+
+        const cube_data = buildCube();
+        var vao: gl.Uint = 0;
+        var vbo: gl.Uint = 0;
+        gl.genVertexArrays(1, &vao);
+        gl.genBuffers(1, &vbo);
+        gl.bindVertexArray(vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, @intCast(cube_data.len * @sizeOf(f32)), &cube_data, gl.STATIC_DRAW);
+        // attribut 0 : position (3 floats), attribut 1 : normale (3 floats), pas de 6 floats
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), null);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(1, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
+        gl.enableVertexAttribArray(1);
+
+        gl.enable(gl.DEPTH_TEST);
+
+        return Renderer{
+            .program = program,
+            .vao = vao,
+            .vbo = vbo,
+            .u_proj = gl.getUniformLocation(program, "uProj"),
+            .u_view = gl.getUniformLocation(program, "uView"),
+            .u_model = gl.getUniformLocation(program, "uModel"),
+            .u_color = gl.getUniformLocation(program, "uColor"),
+        };
+    }
+
+    pub fn deinit(self: Renderer) void {
+        var vao = self.vao;
+        var vbo = self.vbo;
+        gl.deleteVertexArrays(1, &vao);
+        gl.deleteBuffers(1, &vbo);
+        gl.deleteProgram(self.program);
+    }
+
+    /// Debut d'image : camera (projection + vue)
+    pub fn begin(self: Renderer, proj: Mat4, view: Mat4) void {
+        gl.useProgram(self.program);
+        gl.bindVertexArray(self.vao);
+        gl.uniformMatrix4fv(self.u_proj, 1, gl.FALSE, &proj.m);
+        gl.uniformMatrix4fv(self.u_view, 1, gl.FALSE, &view.m);
+    }
+
+    /// Dessine UN cube 1x1x1 a l'origine de la matrice 'model'
+    /// Tout le reste (position, taille) est dans la matrice
+    pub fn drawUnitCube(self: Renderer, model: Mat4, color: [3]f32) void {
         gl.uniformMatrix4fv(self.u_model, 1, gl.FALSE, &model.m);
-        gl.uniform3f(self.u_size, size[0], size[1], size[2]);
         gl.uniform3f(self.u_color, color[0], color[1], color[2]);
         gl.drawArrays(gl.TRIANGLES, 0, cube_vertex_count);
     }
 };
 
-// === main ===
+/// Change une longueur en la gardant entre 0.3 et 2.5.
+fn adjust(v: *f32, delta: f32) void {
+    v.* = std.math.clamp(v.* + delta, 0.3, 2.5);
+}
+
 pub fn main() !void {
     if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
         std.debug.print("SDL_Init failed: {s}\n", .{c.SDL_GetError()});
@@ -179,8 +219,6 @@ pub fn main() !void {
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_CONTEXT_MINOR_VERSION, 0);
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_DOUBLEBUFFER, 1);
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_DEPTH_SIZE, 24);
-    
-    // si b ces deux
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLEBUFFERS, 1);
     _ = c.SDL_GL_SetAttribute(c.SDL_GL_MULTISAMPLESAMPLES, 4);
 
@@ -206,62 +244,32 @@ pub fn main() !void {
     try zopengl.loadCoreProfile(getProcAddress, 4, 0);
     std.debug.print("OpenGL loaded: {s}\n", .{gl.getString(gl.VERSION)});
 
-    const program = try createProgram();
-    defer gl.deleteProgram(program);
+    const renderer = try Renderer.init();
+    defer renderer.deinit();
 
-    const renderer = Renderer{
-        .u_proj = gl.getUniformLocation(program, "uProj"),
-        .u_view = gl.getUniformLocation(program, "uView"),
-        .u_model = gl.getUniformLocation(program, "uModel"),
-        .u_size = gl.getUniformLocation(program, "uSize"),
-        .u_color = gl.getUniformLocation(program, "uColor"),
-    };
-
-        // un seul cube pour tout le corps
-    const cube_data = buildCube();
-    var vao: gl.Uint = 0;
-    var vbo: gl.Uint = 0;
-    gl.genVertexArrays(1, &vao);
-    gl.genBuffers(1, &vbo);
-    defer gl.deleteVertexArrays(1, &vao);
-    defer gl.deleteBuffers(1, &vbo);
-
-    gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, @intCast(cube_data.len * @sizeOf(f32)), &cube_data, gl.STATIC_DRAW);
-    // attribut 0 : position (3 floats), attribut 1 : normale (3 floats), pas de 6 floats
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), null);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(1, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
-    gl.enableVertexAttribArray(1);
-
-    gl.enable(gl.DEPTH_TEST);
-
-    // -- état de la scéne
-    var angles = [7]f32{ 0, 0, 0, 0, 0, 0, 0 };
-    var selected: usize = 0; // 0..6
-    var yaw: f32 = 25; // caméra orbitale (degrés)
+    // -- etat de la scene
+    var dims = body.Dims{};
+    var mode: anim.Mode = .stay;
+    var time: f32 = 0;
+    var yaw: f32 = 25; // camera orbitale (degres)
     var pitch: f32 = 15;
-    var last_ticks: u64 = c.SDL_GetTicks();
     var auto_rotate = true;
+    var last_ticks: u64 = c.SDL_GetTicks();
 
-    std.debug.print("Tab: articulation suivante | gauche/droite: plier | souris (clic gauche): tourner la caméra | Esc: quitter\n", .{});
-    std.debug.print("Articulation sélectionnée: {s}\n", .{joint_names[selected]});
+    std.debug.print("1: stay | 2: walk | 3: jump | Espace: rotation auto | souris (clic gauche): camera | Esc: quitter\n", .{});
+    std.debug.print("T/G: allonger / raccourcir le torse (tete et bras suivent)\n", .{});
 
     var running = true;
     while (running) {
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event)) {
             if (event.type == c.SDL_EVENT_QUIT) running = false;
-            if (event.type == c.SDL_EVENT_KEY_DOWN) {
+            if (event.type == c.SDL_EVENT_KEY_DOWN and !event.key.repeat) {
                 if (event.key.key == c.SDLK_ESCAPE) running = false;
-                if (event.key.key == c.SDLK_TAB and !event.key.repeat) {
-                    selected = (selected + 1) % 7;
-                    std.debug.print("Articulation sélectionnée: {s}\n", .{joint_names[selected]});
-                }
-                if (event.key.key == c.SDLK_SPACE and !event.key.repeat) {
-                    auto_rotate = !auto_rotate;
-                }
+                if (event.key.key == c.SDLK_SPACE) auto_rotate = !auto_rotate;
+                if (event.key.key == c.SDLK_1) mode = .stay;
+                if (event.key.key == c.SDLK_2) mode = .walk;
+                if (event.key.key == c.SDLK_3) mode = .jump;
             }
             if (event.type == c.SDL_EVENT_MOUSE_MOTION and (event.motion.state & 1) != 0) {
                 yaw += event.motion.xrel * 0.4;
@@ -273,18 +281,12 @@ pub fn main() !void {
         const now = c.SDL_GetTicks();
         const dt = @as(f32, @floatFromInt(now - last_ticks)) / 1000.0;
         last_ticks = now;
+        time += dt;
 
-        // Rotation autour de X.
-        //      Avec la jambe qui pend vers -Y et l'avant du corps vers +Z :
-        //          angle négatif -> la jambe part vers l'abant, angle positif -> vers l'arrière.
-        const min_angle = [7]f32{ -90, 0, -30, -90, 0, -30, -30 };
-        const max_angle = [7]f32{ 30, 130, 30, 30, 130, 30, 90 };
-
-        // flèches: plier l'articulation choisie (60 degrés par seconde)
+        // exemple : changer la longueur du torse, la tete et les bras se replacent seuls
         const keys = c.SDL_GetKeyboardState(null);
-        if (keys[@intCast(c.SDL_SCANCODE_RIGHT)]) angles[selected] += 60.0 * dt;
-        if (keys[@intCast(c.SDL_SCANCODE_LEFT)]) angles[selected] -= 60.0 * dt;
-        angles[selected] = std.math.clamp(angles[selected], min_angle[selected], max_angle[selected]);
+        if (keys[@intCast(c.SDL_SCANCODE_T)]) adjust(&dims.torso_h, dt);
+        if (keys[@intCast(c.SDL_SCANCODE_G)]) adjust(&dims.torso_h, -dt);
 
         // === fenetre ===
         var w: c_int = 0;
@@ -297,32 +299,25 @@ pub fn main() !void {
         gl.clearColor(0.16, 0.18, 0.23, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-        gl.useProgram(program);
-        gl.bindVertexArray(vao);
         const dragging = (c.SDL_GetMouseState(null, null) & c.SDL_BUTTON_LMASK) != 0;
         if (auto_rotate and !dragging) {
-            yaw = @mod(yaw + auto_speed * dt, 360.0);
+            yaw = @mod(yaw + constants.auto_speed * dt, 360.0);
         }
-        // gl.rotateX();
 
-        // === caméra : on ne déplace pas la caméra, on déplace le monde en sans inverse
-        //      view = T(0, 0, -d) * Rx(pitch) * Ry(yaw)    (Ry s'applique en premier)
+        // === caméra : on deplace le monde dans le sens inverse
+        //      view = T(0,0,-d) * Rx(pitch) * Ry(yaw) * T(0,-centre,0)
         const proj = Mat4.perspective(math.radians(45.0), fw / fh, 0.1, 100.0);
-        const view = Mat4.translate(0, 0, -camera_dist)
+        const view = Mat4.translate(0, 0, -constants.camera_dist)
             .mul(Mat4.rotateX(math.radians(pitch)))
-            .mul(Mat4.rotateY(math.radians(yaw)));
-        gl.uniformMatrix4fv(renderer.u_proj, 1, gl.FALSE, &proj.m);
-        gl.uniformMatrix4fv(renderer.u_view, 1, gl.FALSE, &view.m);
-
+            .mul(Mat4.rotateY(math.radians(yaw)))
+            .mul(Mat4.translate(0, -constants.view_center_y, 0));
+        renderer.begin(proj, view);
 
         // === le corps
-        const sel_left: ?usize = if (selected < 3) selected else null;
-        const sel_right: ?usize = if (selected >= 3 and selected < 6) selected - 3 else null;
-
+        const pose = anim.pose(mode, time, dims);
         var stack = math.MatrixStack.init();
-        leg.drawLeg(renderer, &stack, .{ -0.35, pelvis_y, 0 }, angles[0..3].*, sel_left);
-        leg.drawLeg(renderer, &stack, .{ 0.35, pelvis_y, 0 }, angles[3..6].*, sel_right);
-        corp.drawTorso(renderer, &stack, .{ 0, pelvis_y, 0 }, angles[6], selected == 6);
+        body.drawBody(renderer, &stack, dims, pose);
+
         _ = c.SDL_GL_SwapWindow(window);
     }
 }
