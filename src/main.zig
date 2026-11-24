@@ -9,6 +9,14 @@ const anim = @import("anim.zig");
 const gl = zopengl.bindings;
 const Mat4 = math.Mat4;
 
+// const State = enum {splash, scene};
+// var state: State = .splash;
+// const splash_time = 2.0;
+// var splash_start = c.getTime();
+// var cur: usize = 0;
+// var acc: f64 =  0;
+// var last = c.getTime();
+
 // --- shaders ---
 // Le vertex shader place chaque sommet a l'ecran, le fragment shader donne la couleur.
 // La normale suit la rotation du modele (mat3(uModel)). Le scale est applique sur les
@@ -136,6 +144,25 @@ fn createProgram() !gl.Uint {
     return program;
 }
 
+const speeds = [_]f32{ 0.1, 0.25, 0.5, 1, 2, 4 }; // facteur de vitesse (x1 = temps reel)
+const frame_step: f32 = 1.0 / 30.0; // pas image par image (en pause)
+
+const BuildState = struct {
+    limit: usize = std.math.maxInt(usize), // cubes autorises dans cette image
+    seen: usize = 0, // cubes rencontres dans cette image
+    total: usize = 0, // nombre total de cubes (mesure a l'image precedente)
+    report: bool = false, // afficher la matrice du dernier cube apparu ?
+};
+var build = BuildState{};
+
+fn printCube(n: usize, model: Mat4) void {
+    std.debug.print("\n[cube {d}/{d}] matrice du modele (translation = derniere colonne)\n", .{ n, build.total });
+    // model.m est en column-major : l'element (ligne r, colonne col) est m[col * 4 + r]
+    for (0..4) |row| {
+        std.debug.print("  | {d:8.3} {d:8.3} {d:8.3} {d:8.3} |\n", .{ model.m[row], model.m[4 + row], model.m[8 + row], model.m[12 + row] });
+    }
+}
+
 // -- render ---
 pub const Renderer = struct {
     program: gl.Uint,
@@ -196,6 +223,11 @@ pub const Renderer = struct {
     /// Dessine UN cube 1x1x1 a l'origine de la matrice 'model'
     /// Tout le reste (position, taille) est dans la matrice
     pub fn drawUnitCube(self: Renderer, model: Mat4, color: [3]f32) void {
+        // construction au ralenti : on compte chaque cube, on ne dessine que les `limit` premiers
+        build.seen += 1;
+        if (build.seen > build.limit) return;
+        if (build.report and build.seen == build.limit) printCube(build.seen, model);
+
         gl.uniformMatrix4fv(self.u_model, 1, gl.FALSE, &model.m);
         gl.uniform3f(self.u_color, color[0], color[1], color[2]);
         gl.drawArrays(gl.TRIANGLES, 0, cube_vertex_count);
@@ -204,7 +236,7 @@ pub const Renderer = struct {
 
 /// Change une longueur en la gardant entre 0.3 et 2.5.
 fn adjust(v: *f32, delta: f32) void {
-    v.* = std.math.clamp(v.* + delta, 0.3, 2.5);
+    v.* = std.math.clamp(v.* + delta, -2.0, 2.0);
 }
 
 pub fn main() !void {
@@ -256,8 +288,18 @@ pub fn main() !void {
     var auto_rotate = true;
     var last_ticks: u64 = c.SDL_GetTicks();
 
+    var paused = false; // P : fige le temps (animation + construction)
+    var speed_idx: usize = 3; // index dans `speeds` (3 -> x1)
+    var build_mode = false; // B : le corps apparait cube par cube
+    var build_limit: usize = 0; // nombre de cubes visibles
+    var build_timer: f32 = 0; // secondes accumulees (x vitesse)
+    var wireframe = false; // F : mode filaire
+    var title_dirty = true; // mettre a jour le titre de la fenetre
+
     std.debug.print("1: stay | 2: walk | 3: jump | Espace: rotation auto | souris (clic gauche): camera | Esc: quitter\n", .{});
     std.debug.print("T/G: allonger / raccourcir le torse (tete et bras suivent)\n", .{});
+    std.debug.print("P: pause | haut/bas: vitesse | N/V: image suivante/precedente (en pause) | F: filaire\n", .{});
+    std.debug.print("B: construction cube par cube | Entree / Retour arriere: cube +1 / -1 | R: recommencer\n", .{});
 
     var running = true;
     while (running) {
@@ -267,9 +309,70 @@ pub fn main() !void {
             if (event.type == c.SDL_EVENT_KEY_DOWN and !event.key.repeat) {
                 if (event.key.key == c.SDLK_ESCAPE) running = false;
                 if (event.key.key == c.SDLK_SPACE) auto_rotate = !auto_rotate;
-                if (event.key.key == c.SDLK_1) mode = .stay;
-                if (event.key.key == c.SDLK_2) mode = .walk;
-                if (event.key.key == c.SDLK_3) mode = .jump;
+                if (event.key.key == c.SDLK_1) {
+                    mode = .stay;
+                    title_dirty = true;
+                }
+                if (event.key.key == c.SDLK_2) {
+                    mode = .walk;
+                    title_dirty = true;
+                }
+                if (event.key.key == c.SDLK_3) {
+                    mode = .jump;
+                    title_dirty = true;
+                }
+
+                // --- ralenti
+                if (event.key.key == c.SDLK_P) {
+                    paused = !paused;
+                    title_dirty = true;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_UP and speed_idx + 1 < speeds.len) {
+                    speed_idx += 1;
+                    title_dirty = true;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_DOWN and speed_idx > 0) {
+                    speed_idx -= 1;
+                    title_dirty = true;
+                }
+                // image par image : seulement en pause 
+                if (paused and event.key.key == c.SDLK_N) time += frame_step;
+                if (paused and event.key.key == c.SDLK_V) time = @max(time - frame_step, 0.0);
+                if (event.key.key == c.SDLK_F) {
+                    wireframe = !wireframe;
+                    gl.polygonMode(gl.FRONT_AND_BACK, if (wireframe) gl.LINE else gl.FILL);
+                }
+
+                // --- construction cube par cube
+                if (event.key.key == c.SDLK_B) {
+                    build_mode = !build_mode;
+                    build_limit = 0;
+                    build_timer = 0;
+                    build.report = false;
+                    title_dirty = true;
+                    std.debug.print("Mode construction : {s}\n", .{if (build_mode) "active" else "desactive"});
+                }
+                if (build_mode and event.key.key == c.SDLK_R) {
+                    build_limit = 0;
+                    build_timer = 0;
+                    build.report = false;
+                    title_dirty = true;
+                }
+                // pas a pas manuel : met automatiquement en pause
+                if (build_mode and event.key.key == c.SDLK_RETURN and build_limit < build.total) {
+                    build_limit += 1;
+                    build_timer = 0;
+                    paused = true;
+                    build.report = true;
+                    title_dirty = true;
+                }
+                if (build_mode and event.key.key == c.SDLK_BACKSPACE and build_limit > 0) {
+                    build_limit -= 1;
+                    build_timer = 0;
+                    paused = true;
+                    build.report = true;
+                    title_dirty = true;
+                }
             }
             if (event.type == c.SDL_EVENT_MOUSE_MOTION and (event.motion.state & 1) != 0) {
                 yaw += event.motion.xrel * 0.4;
@@ -281,7 +384,20 @@ pub fn main() !void {
         const now = c.SDL_GetTicks();
         const dt = @as(f32, @floatFromInt(now - last_ticks)) / 1000.0;
         last_ticks = now;
-        time += dt;
+
+        const speed = speeds[speed_idx];
+        if (!paused) time += dt * speed;
+
+        // construction automatique : un cube toutes les (1 / vitesse) secondes
+        if (build_mode and !paused and build_limit < build.total) {
+            build_timer += dt * speed;
+            if (build_timer >= 1.0) {
+                build_timer -= 1.0;
+                build_limit += 1;
+                build.report = true;
+                title_dirty = true;
+            }
+        }
 
         // exemple : changer la longueur du torse, la tete et les bras se replacent seuls
         const keys = c.SDL_GetKeyboardState(null);
@@ -307,16 +423,21 @@ pub fn main() !void {
         // === caméra : on deplace le monde dans le sens inverse
         //      view = T(0,0,-d) * Rx(pitch) * Ry(yaw) * T(0,-centre,0)
         const proj = Mat4.perspective(math.radians(45.0), fw / fh, 0.1, 100.0);
-        const view = Mat4.translate(0, 0, -constants.camera_dist)
+        const view = Mat4.translate(2, -0.5, -constants.camera_dist)
             .mul(Mat4.rotateX(math.radians(pitch)))
             .mul(Mat4.rotateY(math.radians(yaw)))
             .mul(Mat4.translate(0, -constants.view_center_y, 0));
         renderer.begin(proj, view);
 
         // === le corps
+        // hors mode construction, `limit` est maximal : tous les cubes sont dessines
+        build.limit = if (build_mode) build_limit else std.math.maxInt(usize);
+        build.seen = 0;
         const pose = anim.pose(mode, time, dims);
         var stack = math.MatrixStack.init();
         body.drawBody(renderer, &stack, dims, pose);
+        build.total = build.seen; // nombre total de cubes de la scene
+        build.report = false;
 
         _ = c.SDL_GL_SwapWindow(window);
     }

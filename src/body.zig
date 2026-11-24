@@ -51,7 +51,7 @@ pub fn drawBody(r: Renderer, stack: *math.MatrixStack, d: Dims, p: Pose) void {
     stack.mul(Mat4.rotateX(math.radians(p.torso_tilt)));
 
     // torse : l'origine est au bassin, la boite monte vers le haut
-    part(r, stack, .{ 0, d.torso_h / 2, 0 }, .{ constants.torso_w, d.torso_h, constants.torso_d }, constants.color_torso);
+    part(r, stack, .{ 0, d.torso_h / 2, 0 }, .{ constants.torso_w, d.torso_h, d.torso_h }, constants.color_torso);
 
     // tete : au sommet du torse
     stack.push();
