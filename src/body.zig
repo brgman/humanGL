@@ -36,6 +36,7 @@ fn part(r: Renderer, stack: *math.MatrixStack, offset: [3]f32, size: [3]f32, col
     stack.mul(Mat4.scale(size[0], size[1], size[2]));
     r.drawUnitCube(stack.top(), color);
     stack.pop();
+    r.drawAxes(stack.top(), 0.4);
 }
 
 /// Hierarchie
@@ -51,7 +52,10 @@ pub fn drawBody(r: Renderer, stack: *math.MatrixStack, d: Dims, p: Pose) void {
     stack.mul(Mat4.rotateX(math.radians(p.torso_tilt)));
 
     // torse : l'origine est au bassin, la boite monte vers le haut
-    part(r, stack, .{ 0, d.torso_h / 2, 0 }, .{ constants.torso_w, d.torso_h, d.torso_h }, constants.color_torso);
+    // stack.push();
+    // stack.mul(Mat4.rotateX(math.radians(90)));
+    part(r, stack, .{ 0, d.torso_h / 2, 0 }, .{ constants.torso_w, d.torso_h, constants.torso_w }, constants.color_torso);
+    // stack.pop();
 
     // tete : au sommet du torse
     stack.push();
@@ -69,7 +73,6 @@ pub fn drawBody(r: Renderer, stack: *math.MatrixStack, d: Dims, p: Pose) void {
         stack.mul(Mat4.rotateX(math.radians(p.shoulder[i])));
         part(r, stack, .{ 0, -d.upper_arm / 2, 0 }, .{ constants.arm_w, d.upper_arm, constants.arm_w }, constants.color_arm);
 
-        // avant-bras : coude au bout du bras
         stack.push();
         stack.mul(Mat4.translate(0, -d.upper_arm, 0));
         stack.mul(Mat4.rotateX(math.radians(p.elbow[i])));
@@ -79,7 +82,7 @@ pub fn drawBody(r: Renderer, stack: *math.MatrixStack, d: Dims, p: Pose) void {
 
         // jambe : hanche en bas du torse
         stack.push();
-        stack.mul(Mat4.translate(side * (constants.torso_w - constants.leg_w) / 2, 0, 0));
+        stack.mul(Mat4.translate(side * (constants.torso_w - constants.leg_w) / 2, 0, 0)); // constants.leg_w / 2));
         stack.mul(Mat4.rotateX(math.radians(p.hip[i])));
         part(r, stack, .{ 0, -d.thigh / 2, 0 }, .{ constants.leg_w, d.thigh, constants.leg_w }, constants.color_leg);
 

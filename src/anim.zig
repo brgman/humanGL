@@ -5,7 +5,7 @@ pub const Mode = enum { stay, walk, jump };
 /// Pose du corps au temps t (secondes) pour le mode choisi.
 pub fn pose(mode: Mode, t: f32, d: body.Dims) body.Pose {
     var p = body.Pose{};
-    var lift: f32 = 90; // decalage vertical du bassin
+    var lift: f32 = 0; // decalage vertical du bassin
 
     switch (mode) {
         .stay => {},

@@ -9,6 +9,9 @@ const anim = @import("anim.zig");
 const gl = zopengl.bindings;
 const Mat4 = math.Mat4;
 
+var tri_limit: usize = 12;
+pub var show_axes: bool = false;
+
 // const State = enum {splash, scene};
 // var state: State = .splash;
 // const splash_time = 2.0;
@@ -230,13 +233,35 @@ pub const Renderer = struct {
 
         gl.uniformMatrix4fv(self.u_model, 1, gl.FALSE, &model.m);
         gl.uniform3f(self.u_color, color[0], color[1], color[2]);
+        // gl.drawArrays(gl.TRIANGLES, 0, cube_vertex_count);
+        gl.drawArrays(gl.TRIANGLES, 0, @intCast(tri_limit * 3));
+        // gl.finish();
+        // c.SDL_Delay(300);
+    }
+
+    fn drawRaw(self: Renderer, model: Mat4, color: [3]f32) void {
+        gl.uniformMatrix4fv(self.u_model, 1, gl.FALSE, &model.m);
+        gl.uniform3f(self.u_color, color[0], color[1], color[2]);
         gl.drawArrays(gl.TRIANGLES, 0, cube_vertex_count);
+    }
+
+    pub fn drawAxes(self: Renderer, base: Mat4, len: f32) void {
+        if (!show_axes) return;
+        gl.disable(gl.DEPTH_TEST);
+        defer gl.enable(gl.DEPTH_TEST);
+
+        const t: f32 = 0.01;
+        // X red
+        self.drawRaw(base.mul(Mat4.translate(len / 2, 0, 0)).mul(Mat4.scale(len, t, t)), .{ 1.0, 0.2, 0.2 });
+        // Y green
+        self.drawRaw(base.mul(Mat4.translate(0, len / 2, 0)).mul(Mat4.scale(t, len, t)), .{ 0.2, 1.0, 0.2 });
+        // Z blue
+        self.drawRaw(base.mul(Mat4.translate(0, 0, len / 2)).mul(Mat4.scale(t, t, len)), .{ 0.3, 0.5, 1.0 });
     }
 };
 
-/// Change une longueur en la gardant entre 0.3 et 2.5.
 fn adjust(v: *f32, delta: f32) void {
-    v.* = std.math.clamp(v.* + delta, -2.0, 2.0);
+    v.* = std.math.clamp(v.* + delta, 0.3, 2.0);
 }
 
 pub fn main() !void {
@@ -322,6 +347,13 @@ pub fn main() !void {
                     title_dirty = true;
                 }
 
+                if (event.key.scancode == c.SDL_SCANCODE_PERIOD) {
+                    if (tri_limit < 12) tri_limit += 1;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_COMMA) {
+                    if (tri_limit > 0) tri_limit -= 1;
+                }
+
                 // --- ralenti
                 if (event.key.key == c.SDLK_P) {
                     paused = !paused;
@@ -342,6 +374,8 @@ pub fn main() !void {
                     wireframe = !wireframe;
                     gl.polygonMode(gl.FRONT_AND_BACK, if (wireframe) gl.LINE else gl.FILL);
                 }
+
+                if (event.key.key == c.SDLK_X) show_axes = !show_axes;
 
                 // --- construction cube par cube
                 if (event.key.key == c.SDLK_B) {
@@ -423,11 +457,12 @@ pub fn main() !void {
         // === caméra : on deplace le monde dans le sens inverse
         //      view = T(0,0,-d) * Rx(pitch) * Ry(yaw) * T(0,-centre,0)
         const proj = Mat4.perspective(math.radians(45.0), fw / fh, 0.1, 100.0);
-        const view = Mat4.translate(2, -0.5, -constants.camera_dist)
+        const view = Mat4.translate(0, -0.5, -constants.camera_dist)
             .mul(Mat4.rotateX(math.radians(pitch)))
             .mul(Mat4.rotateY(math.radians(yaw)))
             .mul(Mat4.translate(0, -constants.view_center_y, 0));
         renderer.begin(proj, view);
+        renderer.drawAxes(Mat4.identity(), 1.5);   // оси мира в точке (0, 0, 0)
 
         // === le corps
         // hors mode construction, `limit` est maximal : tous les cubes sont dessines
