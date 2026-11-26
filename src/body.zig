@@ -59,7 +59,7 @@ pub fn drawBody(r: Renderer, stack: *math.MatrixStack, d: Dims, p: Pose) void {
 
     // tete : au sommet du torse
     stack.push();
-    stack.mul(Mat4.translate(0, d.torso_h, 0));
+    stack.mul(Mat4.translate(0, (d.torso_h + 0.05), 0));
     stack.mul(Mat4.rotateY(math.radians(p.head_yaw)));
     part(r, stack, .{ 0, constants.head_size / 2, 0 }, .{ constants.head_size, constants.head_size, constants.head_size }, constants.color_head);
     stack.pop();

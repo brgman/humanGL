@@ -186,13 +186,13 @@ pub const Renderer = struct {
         gl.genVertexArrays(1, &vao);
         gl.genBuffers(1, &vbo);
         gl.bindVertexArray(vao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-        gl.bufferData(gl.ARRAY_BUFFER, @intCast(cube_data.len * @sizeOf(f32)), &cube_data, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo);   
+        gl.bufferData(gl.ARRAY_BUFFER, @intCast(cube_data.len * @sizeOf(f32)), &cube_data, gl.STATIC_DRAW); // передача массива точек библиотеке для отрисовки
         // attribut 0 : position (3 floats), attribut 1 : normale (3 floats), pas de 6 floats
         gl.vertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), null);
         gl.enableVertexAttribArray(0);
-        gl.vertexAttribPointer(1, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
-        gl.enableVertexAttribArray(1);
+        // gl.vertexAttribPointer(1, 3, gl.FLOAT, gl.FALSE, 6 * @sizeOf(f32), @ptrFromInt(3 * @sizeOf(f32)));
+        // gl.enableVertexAttribArray(1);
 
         gl.enable(gl.DEPTH_TEST);
 
